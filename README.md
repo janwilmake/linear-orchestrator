@@ -5,9 +5,12 @@ tickets into reviewed pull requests while nobody watches.
 
 It runs on a 15-minute loop. Each tick checks whether the machine has room,
 picks one eligible ticket from the ready column, moves it to In Progress, and
-spawns an agent that branches, writes the code, tests it, opens a PR and
-reviews its own work. It never merges, and it never pushes to your base branch.
-The morning job is to read the PRs.
+spawns an agent that branches, writes the code, tests it, opens a PR, reviews
+its own work, and fixes the blockers that review found.
+
+It never merges, and it never pushes to your base branch. A review by the agent
+that wrote the code is the weakest evidence available, so the fix pass buys you
+a cleaner diff, not a mergeable one. The morning job is to read the PRs.
 
 ## Change the settings before you run it
 
@@ -37,7 +40,7 @@ all of them:
 ## Read this before you run it
 
 **Your repo must have its own agent guide.** The prompt this skill hands to
-each agent is four short paragraphs *because* the guide supplies the rest —
+each agent is seven short paragraphs *because* the guide supplies the rest —
 branching, local checks, the PR template, testing, security. Point it at a repo
 with no such file and you get an unattended agent running with
 `--dangerously-skip-permissions` and almost no instructions.

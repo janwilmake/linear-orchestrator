@@ -1,13 +1,17 @@
 ---
 name: orchestrate-linear
-description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 15-minute loop, checks free CPU/RAM, picks a Todo ticket from Linear (a preferred assignee or unassigned first, a fallback assignee second), and spawns a `cca` agent on Opus that opens and reviews the PR. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
+description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 15-minute loop, checks free CPU/RAM, picks a Todo ticket from Linear (a preferred assignee or unassigned first, a fallback assignee second), and spawns a `cca` agent on Opus that opens the PR, reviews it, and fixes the blockers its own review found. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
 ---
 
 # orchestrate-linear — unattended nightly ticket runner
 
-Turns ready tickets into reviewed pull requests while nobody watches. It never
-merges anything. The morning job is to read the PRs, not to fix a broken base
-branch.
+Turns ready tickets into reviewed pull requests while nobody watches. Each PR
+arrives with the agent's own review posted on it, and the blockers from that
+review already fixed.
+
+It still never merges anything. A review by the agent that wrote the code is the
+weakest evidence available — same model in both roles, same assumptions. The
+morning job is to read the PRs, not to fix a broken base branch.
 
 ## Project settings
 
@@ -244,7 +248,7 @@ enough, and a pasted copy goes stale the moment somebody edits the ticket.
 Restating any of that is not harmless padding. A second copy of a rule that
 changes on someone else's schedule *overrides* what the agent correctly knew.
 
-So the whole prompt is the ticket id, the branch name, and the four things that
+So the whole prompt is the ticket id, the branch name, and the six things that
 are true only here:
 
 > Work ticket **`<TICKET_PREFIX>-###`** end to end, unattended — read it in
@@ -268,17 +272,50 @@ are true only here:
 > Other agents are running dev servers, so take a free port in 5200–5299 and
 > point `VITE_BASE_URL` at it.
 >
-> Then run `/review <your PR number>`, comment the PR link on the ticket, leave
-> it In Progress, and stop.
+> Then run `/review <your PR number>` and let it post its comment.
+>
+> After that comment is posted, make **one** fix pass over what it found: every
+> blocker, plus the nits that are mechanical and sit inside files you already
+> changed. Leave the rest. Do not widen the diff, and do not review a second
+> time — one pass, then stop fixing. Re-run the CLAUDE.md §4 local checks, and
+> re-test in the browser any blocker whose proof was a runtime one. Push the
+> fixes as one commit of their own, then reply on the PR: what you fixed, in
+> which commit, and what you left with the reason. A PR with nothing left to fix
+> still does not get merged.
+>
+> Finally comment the PR link on the ticket, leave it In Progress, and stop.
 
 Write the prompt with the settings resolved, as above — the agent has no copy
 of this table. Pass `gitBranchName` verbatim from the tracker rather than
 inventing a branch name: it is what makes the tracker link the PR back to the
 ticket by itself.
 
-Keep all five paragraphs. Each covers something no file in the copy says: the
-no-confirmation rule, Decisions, the marker, the two `cca` footguns, and the
-closing sequence. Everything else the agent already has.
+Keep all seven paragraphs. Each covers something no file in the copy says: the
+no-confirmation rule, Decisions, the marker, the two `cca` footguns, the review
+call, the fix pass, and the closing sequence. Everything else the agent already
+has.
+
+### Why the fix pass runs after the comment, and only once
+
+**The review comment is the morning's best signal** — the agent naming the
+faults in its own work. Move the fix pass ahead of it and that record never
+exists: the reader gets a clean-looking PR and no evidence that anything was
+checked. So the order is post, then fix, then say what you fixed. The reply
+comment keeps the trail readable end to end.
+
+**One pass, because self-review does not converge.** An agent that reviews its
+own fixes finds a fresh set of blockers every round, each one thinner than the
+last, and the loop runs until the night ends. One pass also bounds the cost: the
+agent holds its slot until the window closes, and at a real `MAX_AGENTS` of 2 on
+this machine, every extra minute is a ticket the night does not reach.
+
+**Fixing does not earn a merge.** The author and the reviewer are one model here,
+so "no blockers left" carries no independent weight. One bad merge into
+`BASE_BRANCH` at 02:00 also lands under every agent that spawns after it, which
+turns one broken PR into a morning of bisecting. To make merges defensible, the
+review has to come from an agent that did not write the code — a second `cca`
+agent on the open PR, on a later tick. That is a different design; this file does
+not do it.
 
 ---
 
@@ -323,6 +360,10 @@ gh pr list --state open --base <BASE_BRANCH> --json number,title,headRefName,isD
   samples, three of them under 2 GB. So the third slot is a coin toss, and the
   cap of 4 is never reached. That is the gate working, not failing. To get real
   concurrency, add RAM — no threshold change creates memory that is not there.
+- **An agent still runs long after its PR opened.** The fix pass turned into a
+  review loop. Read the PR: more than one fix commit, or a second review comment,
+  means the one-pass rule did not hold. Close the window once the work is pushed,
+  and the ticket keeps its PR.
 - **All 8 slots busy.** Agents keep their slot when they leave uncommitted work
   or unpushed commits. Read `git -C ~/.claude/agents/agent-N status` before
   closing a window — that is the run's output sitting there.
