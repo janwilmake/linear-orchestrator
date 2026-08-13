@@ -3,10 +3,17 @@
 A [Claude Code](https://claude.com/claude-code) skill that turns ready Linear
 tickets into reviewed pull requests while nobody watches.
 
-It runs on a 15-minute loop. Each tick checks whether the machine has room,
-picks one eligible ticket from the ready column, moves it to In Progress, and
-spawns an agent that branches, writes the code, tests it, opens a PR, reviews
-its own work, and fixes the blockers that review found.
+It runs on a 5-minute loop. Each tick measures free memory first and spawns one
+agent per 2 GB of it, so the machine reaches full concurrency in one tick rather
+than climbing to it one agent at a time. Each agent takes an eligible ticket
+from the ready column, moves it to In Progress, then branches, writes the code,
+tests it, opens a PR, reviews its own work, and fixes the blockers that review
+found.
+
+The ticket eligibility pass — the expensive part, since it reads every open
+description — is cached to a file and rebuilt every 30 minutes, so a tick with
+no free slot costs a single `bash` call. That is what makes a loop this tight
+affordable to leave running overnight.
 
 It never merges, and it never pushes to your base branch. A review by the agent
 that wrote the code is the weakest evidence available, so the fix pass buys you
@@ -36,6 +43,7 @@ all of them:
 | `RAM_PER_AGENT_GB` | What one agent costs on your stack — see below               |
 | `PROD_SURFACES`    | What the loop must never write to                            |
 | `REVIEW_COMMAND`   | Your review command                                          |
+| `QUEUE_CACHE`      | Where the eligible-ticket queue is cached                    |
 
 ## Read this before you run it
 
@@ -49,12 +57,15 @@ with no such file and you get an unattended agent running with
 of the skill and it is also the risk. Give the loop a repo where the worst an
 agent can do is open a bad PR.
 
-**`RAM_PER_AGENT_GB` is the number people get wrong.** The default assumes one
-Claude session, one dev server and one Chrome. A stack that runs Docker or a
-local database costs far more, and the capacity gate cannot detect this — it
-will over-spawn until the machine swaps. Concurrency is bounded by real free
-memory, so on a small machine the loop runs one agent at a time no matter what
-the cap says.
+**`RAM_PER_AGENT_GB` is the number people get wrong.** It is now a divisor, not
+just a threshold: every tick spawns `free memory / RAM_PER_AGENT_GB` agents. The
+default of 2 assumes one Claude session, one dev server and one Chrome. A stack
+that runs Docker or a local database costs far more, and the probe cannot detect
+this — set it too low and the loop over-spawns until the machine swaps.
+
+Concurrency is bounded by real free memory, so on a small machine the loop runs
+one or two agents no matter what the cap says. Getting to full concurrency
+faster does not raise that ceiling.
 
 ## Requirements
 
