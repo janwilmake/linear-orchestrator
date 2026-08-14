@@ -537,41 +537,14 @@ morning.
 on one, and never describe what it produced — the next tick, or the morning,
 finds out by reading the PR.
 
-### Compact the session once an hour
+### Compact once an hour
 
-**When the probe printed `COMPACT DUE`, the last thing the tick does is compact
-its own context** — `/compact` via the Skill tool, after the report line and
-after every write below has landed. Nothing else in the tick may run afterwards.
-
-The reason is money. A tick is cheap to *run* and expensive to *carry*: twelve
-an hour, all night, in one session, and every one of them re-sends the whole
-conversation before it does anything. The transcript is what costs, not the
-work, and it only grows. An hour of ticks is roughly the point where the carry
-outweighs a summary of it.
-
-**This is safe precisely because the tick keeps nothing in its head.** Every
-durable fact lives somewhere a fresh context can read: the claim is the ticket
-status, the candidate list is `QUEUE_CACHE`, the leftover work is `WORK_CACHE`,
-the running agents are the lock files, and the PRs are on the forge. That is a
-property worth protecting — **if a tick ever wants to remember something across
-the compaction boundary, the place to put it is a cache file, not a sentence in
-the report.**
-
-Two rules follow, and both matter more than they look:
-
-- **Compact after the writes, never between them.** A compaction that lands
-  between "ticket moved to `CLAIMED_STATUS`" and "`cca` spawned" strands the
-  ticket, and the recovery in step 3 is gone with the context that knew about
-  it. Finish the tick, then compact.
-- **Keep the per-tick footprint small anyway.** Compaction bounds the growth;
-  it does not excuse it. Project `gh` output down with `--jq` to the fields the
-  decision actually needs rather than pulling whole PR bodies into context, and
-  keep the report to its line or two. A tick that dumps a 40-PR JSON blob costs
-  that blob on every remaining tick of the hour.
-
-The stamp is touched when the probe prints the line, not when the compaction
-happens, so a tick that ends early at `slots = 0` still resets the hour — the
-point is one compaction per hour, not one per hour of *spawning*.
+`COMPACT DUE` from the probe means the tick adds one last line: `⟳ /compact due`.
+That is all it can do — `/compact` is a built-in CLI command and the Skill tool
+refuses it, so a human types it and auto-compaction is the overnight backstop.
+Compacting at a tick boundary loses nothing: the claim is the ticket status, the
+work is in the two caches, the agents are the lock files. Twelve ticks an hour
+re-sending an ever-longer transcript is the bill, not the work.
 
 ---
 
@@ -860,11 +833,9 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
   another branch, so the hourly fetch keeps refusing. Every agent spawned
   meanwhile branches from whatever commit `REPO` is parked on. Clean the working
   copy — the loop will not do it for you, on purpose.
-- **The session costs a fortune even though every tick prints one line.** The
-  line is what the tick *does*; the bill is the transcript it re-sends before
-  doing it. Check the hourly compaction is really happening
-  (`stat -f %m ~/.claude/orchestrate-linear/last-compact`) and that no step is
-  pulling whole `gh` payloads into context where a `--jq` projection would do.
+- **The session costs a fortune though every tick prints one line.** The bill is
+  the transcript, not the tick. Compact hourly, and project `gh` output with
+  `--jq` instead of pulling whole PR payloads into context.
 - **A PR that merges clean but reverts something.** Its branch point predates
   the change it undoes. Check when `REPO` last fast-forwarded against when the
   branch was cut; an agent cannot see this from inside its own clone.
