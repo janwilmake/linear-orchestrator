@@ -80,11 +80,20 @@ Pick by the argument you were called with.
 3. Run **one tick immediately**, so the user sees the first agents start rather
    than waiting for proof that it works. That tick builds the queue and fills
    every slot the machine has room for.
-4. Then start the repeat:
+4. Then start the repeat — **one process per tick**, detached, so no transcript
+   ever accumulates:
 
+   ```bash
+   cd <REPO> && nohup zsh -c 'while true; do
+     claude -p "/orchestrate-linear tick" --dangerously-skip-permissions \
+       >> ~/.claude/orchestrate-linear/tick.log 2>&1
+     sleep 300
+   done' >/dev/null 2>&1 &
    ```
-   /loop 5m /orchestrate-linear tick
-   ```
+
+   Each tick's report lands in `tick.log`; `tail -f` it to watch the night.
+   Running it as `/loop 5m /orchestrate-linear tick` inside a session works too
+   and is easier to watch, but that session carries every tick it has ever run.
 
 5. Tell the user the loop is live, which tickets the first agents took, and how
    to stop it.
@@ -135,12 +144,6 @@ if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -f %m "$stamp") )) -gt 3600 ]
   else
     echo "dev NOT refreshed: repo is dirty or not on <BASE_BRANCH>"
   fi
-fi
-
-# Once an hour, shed the session's own context. Step 5 acts on this line.
-compact=~/.claude/orchestrate-linear/last-compact
-if [ ! -f "$compact" ] || [ $(( $(date +%s) - $(stat -f %m "$compact") )) -gt 3600 ]; then
-  echo "COMPACT DUE"; touch "$compact"
 fi
 
 # Reap first: a slot with no live lock must own no processes.
@@ -537,14 +540,16 @@ morning.
 on one, and never describe what it produced — the next tick, or the morning,
 finds out by reading the PR.
 
-### Compact once an hour
+### Run every tick in its own session
 
-`COMPACT DUE` from the probe means the tick adds one last line: `⟳ /compact due`.
-That is all it can do — `/compact` is a built-in CLI command and the Skill tool
-refuses it, so a human types it and auto-compaction is the overnight backstop.
-Compacting at a tick boundary loses nothing: the claim is the ticket status, the
-work is in the two caches, the agents are the lock files. Twelve ticks an hour
-re-sending an ever-longer transcript is the bill, not the work.
+The loop's real cost is the transcript, not the tick: twelve ticks an hour in one
+session, each re-sending everything before it. Compaction cannot fix that —
+`/compact` is a built-in CLI command, the Skill tool refuses it, and nobody is
+awake to type it. So do not grow a transcript at all. Each tick is its own
+`claude -p` process that starts empty and exits, so the twelfth hour costs what
+the first did. This works only because the tick keeps nothing in its head: the
+claim is the ticket status, the work is in the two caches, the agents are the
+lock files.
 
 ---
 
@@ -740,8 +745,8 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
 
 ## Mode: stop
 
-1. End the repeat: `CronList` for an entry that runs this skill, then
-   `CronDelete` it. If the loop is running in an interactive session instead,
+1. End the repeat: `pkill -f 'orchestrate-linear tick'` kills the detached shell
+   and any tick mid-flight. If the loop is running inside a session instead,
    tell that session to stop looping.
 2. Delete `QUEUE_CACHE` and `WORK_CACHE`. Both are caches of a moment that has
    passed, and leaving them means the next run's first tick spawns against a
@@ -834,8 +839,8 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
   meanwhile branches from whatever commit `REPO` is parked on. Clean the working
   copy — the loop will not do it for you, on purpose.
 - **The session costs a fortune though every tick prints one line.** The bill is
-  the transcript, not the tick. Compact hourly, and project `gh` output with
-  `--jq` instead of pulling whole PR payloads into context.
+  the transcript, not the tick — run the loop as one `claude -p` per tick, and
+  project `gh` output with `--jq` instead of pulling whole PR payloads in.
 - **A PR that merges clean but reverts something.** Its branch point predates
   the change it undoes. Check when `REPO` last fast-forwarded against when the
   branch was cut; an agent cannot see this from inside its own clone.
