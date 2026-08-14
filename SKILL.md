@@ -595,13 +595,20 @@ are true only here:
 > still does not get merged, and does not get taken out of draft by you.
 >
 > Finally comment the PR link on the ticket, leave it In Progress, and stop.
+>
+> **Before you stop, clean up after yourself.** Close every Chrome tab you
+> opened — nobody else can: tabs are scoped to your own MCP session, so a tab
+> you leave behind outlives you and cannot be closed by the orchestrator or by
+> another agent. Then stop the dev server you started. Do this as the last thing
+> you do, after the PR is in its final state, so a failure here cannot cost you
+> the work.
 
 Write the prompt with the settings resolved, as above — the agent has no copy
 of this table. Pass `gitBranchName` verbatim from the tracker rather than
 inventing a branch name: it is what makes the tracker link the PR back to the
 ticket by itself.
 
-Keep all seven paragraphs. Each covers something no file in the copy says: the
+Keep all eight paragraphs. Each covers something no file in the copy says: the
 no-confirmation rule, Decisions, the marker, the two `cca` footguns, the review
 call, the fix pass, and the closing sequence. Everything else the agent already
 has.
@@ -611,6 +618,16 @@ has.
 Shorter than the ticket prompt: no branching, no Decisions section, no ticket
 claim. The PR exists. Each starts with `gh pr checkout <PR#>`, and each ends
 with **leave it a draft** — only the orchestrator promotes, in 2b.
+
+**All three end with the same teardown, and it is not optional:** close every
+Chrome tab you opened and stop the dev server you started, as the last thing you
+do. Tabs are scoped per MCP session, so a tab an agent abandons cannot be closed
+by the orchestrator or by any other agent — it simply sits there until Chrome
+quits. The dev server is worse: it is a detached `npm exec` child, so it
+survives the agent's own session and holds 150–200 MB that the capacity gate
+never sees. Step 1's reaper exists because agents used to skip this, and it
+still has to, for the agent that dies before reaching its teardown — but an
+agent that finishes normally must not leave that work to the reaper.
 
 **needs-review** — the whole ticket prompt's review paragraph and fix paragraph,
 nothing else. Say the PR was opened earlier and never got its review, so it must
