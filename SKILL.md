@@ -405,6 +405,22 @@ it has all five of:
 The last two are re-checked on every tick after promotion too, in 2b, because a
 merge into `BASE_BRANCH` can undo either of them at any moment.
 
+**Those five are the only reasons to keep a draft.** Draft means *the loop is not
+finished*. It never means "finished, but a human has to do something".
+
+So a PR whose five gates pass but which still needs a person — a manual test no
+agent can run, a credential nobody stored, an account that is not connected —
+**gets promoted**, with that item as the **first line** of the promotion comment:
+what is needed, why no agent can do it, and the options. Do not invent a
+human-hold state, and never leave such a PR drafted "until someone looks at it".
+
+Drafting it achieves the opposite of the intent: the person who must act is the
+one person the draft hides it from. One run kept a PR drafted for hours on
+exactly this mistake — every gate green, waiting on one manual test the user had
+asked for — while the user read the ready list and never saw it. The PR
+template's **Needs human verification** section carries the same fact for
+whoever reads the diff.
+
 `WORK_CACHE` holds the drafts that are missing one of those, what each is
 missing, and in what order to take them. Rebuild it on the same 30-minute
 staleness rule as `QUEUE_CACHE`:
@@ -425,8 +441,16 @@ For each draft, decide what it still needs:
   green CI runs from two days earlier and none on the commit under review,
   because the branch had begun conflicting in between.
   `mergeable == "UNKNOWN"` is **not** this state — it is "ask again next tick".
-- **needs-review** — no review and no review-shaped comment from the loop.
+- **needs-review** — no review-shaped comment from the loop **dated after the
+  head commit**. The test is the order, not the mere existence: an agent that
+  pushes code and dies before running `/review` leaves a PR carrying an *older*
+  review, and a test for "is there a review?" reads that as done. One run hit
+  this exactly — a rework was pushed, the agent died before reviewing, and the PR
+  sat `MERGEABLE`, green and screenshotted, looking finished with unreviewed code
+  in it. Compare timestamps: `.comments[].createdAt` against
+  `.commits[-1].committedDate`.
 - **needs-fix** — a review exists, but no commit after it and no reply comment.
+  The mirror image of the case above, and both are found by the same comparison.
 - **needs-screenshot** — it touches a user-visible file and the body carries no
   screenshot. On this repo a user-visible file means `app/routes/**`,
   `app/components/**`, or a non-`.server` `.tsx` under `app/`. That half is
@@ -505,10 +529,22 @@ at it.
 Read the ready column from `TRACKER`:
 
 ```
-list_issues(team: TRACKER_TEAM, state: READY_STATUS,
+list_issues(team: TRACKER_TEAM, state: READY_STATUS, includeArchived: false,
             fields: ["identifier","title","description","gitBranchName",
                      "priority","assignee","labels","updatedAt"])
 ```
+
+**`includeArchived` defaults to `true`, so pass `false` explicitly.** An archived
+ticket looks exactly like a live one in the result — same status, same priority,
+same assignee — and nothing in the row says "archived" unless you asked for
+`archivedAt`. One run surfaced an **Urgent** ticket archived three weeks earlier
+as the top candidate, and only a `get_issue` before claiming caught it. Pass the
+flag, and treat a non-null `archivedAt` as a drop.
+
+Note also that `state:` matches the status **type**, not the column name. Asking
+for `Backlog` can return every backlog-type status — on one workspace that meant
+`Planned`, `Ideas` and `To Discuss` as well. Filter to the exact column name you
+meant, or the backlog pass quietly takes work from columns nobody triaged.
 
 You need the title and description to judge eligibility below. The agent needs
 neither — it reads the ticket itself. Only the identifier and `gitBranchName`
@@ -873,6 +909,16 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
 
 ## What goes wrong
 
+- **A retry loop that reports success without doing the work.** Never write
+  `gh ... | tail -1 && break`, or any retry whose condition is a *pipeline's*
+  exit status: the shell reports the status of the **last** command in the pipe,
+  so `tail` returning 0 hides a `gh` that just 503'd, the loop breaks, and the
+  write silently never happened. This skipped a PR's re-draft on one run and the
+  tick reported it as done. Make every retry **verify the state** instead —
+  re-read `gh pr view <PR#> --json isDraft`, or the labels, or whatever the write
+  was supposed to change — and break on the state being right, never on a command
+  appearing to succeed. The same rule covers `gh` generally: it 502s and 503s
+  often enough that a single unchecked call is a coin toss.
 - **A tick spawns nothing for hours.** Usually correct — the queue is empty of
   eligible tickets, or `MAX_AGENTS` are already busy. Check `status` before
   assuming it broke.
