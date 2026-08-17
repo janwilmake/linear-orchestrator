@@ -169,6 +169,24 @@ for n in 1 2 3 4 5 6 7 8; do
   [ -n "$p" ] && kill -0 "$p" 2>/dev/null && busy=$((busy+1))
 done
 echo "cores=$cores ramgb=$ramgb load1=$load freegb=$freegb diskgb=$diskgb busy=$busy"
+
+# Which of the loop's own promoted PRs can no longer merge, or are red. One
+# call, and it decides nothing — 2b acts on it. Runs even when slots is 0,
+# because re-drafting needs no agent.
+gh pr list --state open --base <BASE_BRANCH> --limit 60 \
+  --json number,isDraft,mergeable,body,statusCheckRollup --jq '
+  [ .[]
+    | select(.isDraft == false)
+    | select((.body // "") | test("🌙"))
+    | { pr: .number,
+        merge: .mergeable,
+        ci: ( [ .statusCheckRollup[]?
+                | select(.conclusion != null and .conclusion != "SKIPPED" and .conclusion != "NEUTRAL") ] as $c
+              | if   ([ $c[] | select((.name // "") | startswith("Test (shard")) ] | length) == 0 then "not-run"
+                elif ([ $c[] | select(.conclusion != "SUCCESS") ] | length)      > 0 then "failing"
+                else "green" end ) }
+    | select(.merge == "CONFLICTING" or .ci == "failing") ]
+  | if length > 0 then "REGATE: \(.)" else empty end'
 ```
 
 **Why the fetch is here and not in the agent prompt.** `cca` clones `$PWD` at
@@ -246,21 +264,46 @@ Two conditions gate the whole tick — if either fails, `slots = 0`:
   every agent at once, not just the new one. This machine normally sits near
   19 GB free, so a stricter number would block every tick.
 
-**If `slots` is 0, end the tick right here.** One line: the numbers, and which
-one was zero or blocking. Do not read the tracker, do not touch `QUEUE_CACHE`,
-do not explain. A skipped tick is the normal case and the next one is 5 minutes
-away.
+**If `slots` is 0, end the tick right here** — except for the `REGATE` line.
+One line: the numbers, and which one was zero or blocking. Do not read the
+tracker, do not touch `QUEUE_CACHE`, do not explain. A skipped tick is the normal
+case and the next one is 5 minutes away.
+
+**A `REGATE` line is acted on even at `slots = 0`,** because taking a PR out of
+draft needs no agent — only fixing it does. Do the re-draft half of 2b, then end
+the tick. A promoted PR that cannot merge is worse than one nobody has reviewed:
+it sits in the human's ready list looking finished.
+
+**Two traps in that one call, both learned the hard way.**
+
+`mergeable` is computed **lazily** by GitHub, so the first read of a PR often
+returns `UNKNOWN` — early in one run every PR in the list read `UNKNOWN`, and
+minutes later the same query returned real values. So: `UNKNOWN` is never a
+conflict, and it is never a pass either. It means *not known yet*, so the PR is
+not promotable this tick and the next tick asks again. Treating `UNKNOWN` as
+clean promotes PRs that cannot merge; treating it as dirty re-drafts the whole
+board.
+
+`statusCheckRollup` is scoped to the **head commit**, which is what you want, but
+a rollup that is merely non-empty proves nothing. This repo's `blacksmith.sh`
+integration posts `[code]smith` and skips it, so a PR whose CI never ran still
+shows one check. That is why the test requires a `Test (shard …)` check to be
+present and green: the shards only exist if the CI workflow actually executed.
+Counting checks, or trusting "no failures", both read a never-run PR as passing.
 
 ### Step 2 — pick the next `slots` pieces of work
 
-Three kinds of work compete for a slot, and they are strictly ordered. **Fill
+Four kinds of work compete for a slot, and they are strictly ordered. **Fill
 slots from the top, and only fall to the next kind when the one above it is
 empty:**
 
 1. **Reclaim** — a PR the user marked `INVALID_LABEL`. Below.
-2. **Finish a draft** — an open draft PR with leftover work: no review, no fix
-   pass after its review, or a user-visible change with no screenshot. Below.
-3. **Start a ticket** — a fresh ticket from `READY_STATUS`. The original path,
+2. **De-gate** — one of the loop's own promoted PRs that has since stopped being
+   mergeable, or whose CI is red. Back to draft, fixed, re-promoted. Below.
+3. **Finish a draft** — an open draft PR with leftover work: no review, no fix
+   pass after its review, no screenshot on a user-visible change, a conflict, or
+   CI that is not green. Below.
+4. **Start a ticket** — a fresh ticket from `READY_STATUS`. The original path,
    from `QUEUE_CACHE`.
 
 The order is the whole point. **An open PR is worth more than a new one**: it is
@@ -295,8 +338,8 @@ wrong. For each one, in this order:
    `gh pr edit <PR#> --remove-label <INVALID_LABEL>`.
 
 **Spawn the rework on this tick, ahead of any draft** — do not leave the ticket
-to be picked up by 2c later, because 2b sits between here and there and a backlog
-of drafts would park human feedback behind thirty machine-generated PRs. Claim
+to be picked up by 2d later, because 2b and 2c sit between here and there and a
+backlog of drafts would park human feedback behind thirty machine-generated PRs. Claim
 the ticket back to `CLAIMED_STATUS` as in step 3 first. Where several PRs carry
 the label, order them by ticket priority.
 
@@ -314,14 +357,53 @@ agent needs, so pass it in the spawn prompt — this is the one case where pasti
 into the prompt is right, because the comments live on the PR and not in the
 ticket the agent reads.
 
-#### 2b — Finish the drafts
+#### 2b — De-gate the promoted PRs that went stale
+
+**Every merge into `BASE_BRANCH` can invalidate a PR that was already promoted.**
+Nothing in the loop used to notice, so PRs accumulated conflicts and sat in the
+human's ready list unmergeable. This step is the fix, and it is cheap enough to
+run on every tick.
+
+Act on the `REGATE` line from step 1. For each PR it names:
+
+1. **Skip it if a live agent holds its branch.** Same lock-file check as anywhere
+   else — `~/.claude/agents/agent-N.lock` plus
+   `git -C ~/.claude/agents/agent-N branch --show-current`. An agent mid-push
+   will resolve this itself, and re-drafting under it starts a fight the
+   orchestrator loses.
+2. **Back to draft**: `gh pr ready --undo <PR#>`. Draft is the honest signal, and
+   this PR is no longer ready.
+3. **Comment why**, in one sentence: conflicts with `BASE_BRANCH`, or CI red on
+   the head commit, and that the loop will fix it and re-promote.
+4. **Put it in `WORK_CACHE`** as `needs-mergeable`, with an `attempts` count.
+5. **If there is a slot, dispatch the fix now** — see the `needs-mergeable`
+   prompt. Steps 1–4 need no slot; only this one does.
+
+**Only ever touch PRs the loop itself opened.** The test is the `🌙` marker in
+the body, which is why the step 1 query filters on it. On this repo 8 of 51 open
+PRs conflicted at one point and 3 of those 8 were the user's own work — silently
+re-drafting a human's PR is not the loop's business.
+
+**Cap the attempts at 3.** A PR can conflict, get fixed, get promoted, and
+conflict again on the next merge; without a cap that is an agent every few
+minutes forever. At 3, leave it drafted, say so in the tick report, and let a
+human look. `WORK_CACHE` carries the counter.
+
+#### 2c — Finish the drafts
 
 Every PR this loop opens starts as a draft (step 4) and only becomes ready when
-it has all three of:
+it has all five of:
 
 - a review posted on it,
 - a fix pass over that review, with a reply comment saying what was fixed,
-- a screenshot, if it changes anything a user can see.
+- a screenshot, if it changes anything a user can see,
+- **`mergeable` that is not `CONFLICTING`** — a PR that cannot merge is not
+  ready, whatever else is on it,
+- **CI green on the head commit** — every non-skipped check `SUCCESS`, and a
+  `Test (shard …)` check present to prove the workflow actually ran.
+
+The last two are re-checked on every tick after promotion too, in 2b, because a
+merge into `BASE_BRANCH` can undo either of them at any moment.
 
 `WORK_CACHE` holds the drafts that are missing one of those, what each is
 missing, and in what order to take them. Rebuild it on the same 30-minute
@@ -334,6 +416,15 @@ gh pr list --state open --base <BASE_BRANCH> --draft \
 
 For each draft, decide what it still needs:
 
+- **needs-mergeable** — `mergeable` is `CONFLICTING`, or CI on the head commit is
+  `failing`. This one outranks the rest because **it blocks the others from being
+  answerable**: GitHub builds a `pull_request` workflow against a merge commit of
+  the branch into the base, and it cannot build that commit while the branch
+  conflicts — so a conflicted PR does not run CI at all, and its checks stay
+  silent rather than red. One run hit exactly this: a reworked PR showed two
+  green CI runs from two days earlier and none on the commit under review,
+  because the branch had begun conflicting in between.
+  `mergeable == "UNKNOWN"` is **not** this state — it is "ask again next tick".
 - **needs-review** — no review and no review-shaped comment from the loop.
 - **needs-fix** — a review exists, but no commit after it and no reply comment.
 - **needs-screenshot** — it touches a user-visible file and the body carries no
@@ -363,13 +454,14 @@ For each draft, decide what it still needs:
   and drop it from the cache. This is the only place a PR becomes ready, and it
   happens on evidence, never on an agent's say-so.
 
-Order the rest: needs-fix first (a posted review with no fix is the most
-misleading state a PR can be in — it looks checked and is not), then
-needs-review, then needs-screenshot. Within a kind, oldest PR first.
+Order the rest: needs-mergeable first (nothing else on the PR can be trusted
+while it cannot merge, and CI cannot even run), then needs-fix (a posted review
+with no fix is the most misleading state a PR can be in — it looks checked and is
+not), then needs-review, then needs-screenshot. Within a kind, oldest PR first.
 
-#### 2c — Start a new ticket
+#### 2d — Start a new ticket
 
-Only when 2a and 2b are both empty. Judging eligibility means reading every open
+Only when 2a, 2b and 2c are all empty. Judging eligibility means reading every open
 ticket's description, and that is by far the most expensive thing a tick can do.
 So it happens once and the verdict is cached: `QUEUE_CACHE` holds the tickets
 that survived, in the order they should be taken, carrying only what a spawn
@@ -633,13 +725,13 @@ no-confirmation rule, Decisions, the marker, the two `cca` footguns, the review
 call, the fix pass, and the closing sequence. Everything else the agent already
 has.
 
-### The three prompts for finishing a draft (2b)
+### The four prompts for finishing a draft (2b and 2c)
 
 Shorter than the ticket prompt: no branching, no Decisions section, no ticket
 claim. The PR exists. Each starts with `gh pr checkout <PR#>`, and each ends
-with **leave it a draft** — only the orchestrator promotes, in 2b.
+with **leave it a draft** — only the orchestrator promotes, in 2c.
 
-**All three end with the same teardown, and it is not optional:** close every
+**All four end with the same teardown, and it is not optional:** close every
 Chrome tab you opened and stop the dev server you started, as the last thing you
 do. Tabs are scoped per MCP session, so a tab an agent abandons cannot be closed
 by the orchestrator or by any other agent — it simply sits there until Chrome
@@ -661,6 +753,26 @@ were failing.
 landed inline) and say **do not run the review again** — a second review on the
 same diff produces a thinner set of findings and buries the first. One fix pass,
 one commit, one reply comment.
+
+**needs-mergeable** — the branch cannot merge into `BASE_BRANCH`, or CI is red on
+its head commit. Say which, and say that this is the only thing to fix.
+
+* **Merge `BASE_BRANCH` in, do not rebase.** `git fetch origin && git merge
+  origin/<BASE_BRANCH>`. Rebasing rewrites published history on a branch that has
+  an open PR, and CLAUDE.md keeps that for the user — a force-push here would
+  also throw away the review comments' line anchors.
+* Resolve each conflict keeping **both** intents. A conflict means two changes
+  disagree, so picking one side wholesale silently reverts the other; if the two
+  cannot both hold, that is a Decision to write in a PR comment, not a coin toss.
+* **Change nothing else.** No refactors, no drive-by fixes, no second review. The
+  diff must grow only by the resolution and, if CI was red, by what CI named.
+* If CI was red, fix what it reported — CLAUDE.md is explicit that a failing
+  check is fixed on the branch.
+* Re-run the CLAUDE.md section 4 local checks, push, then comment: what
+  conflicted, how it was resolved, and what CI said.
+
+Note that a conflicted PR shows **no CI at all** rather than red CI, so expect to
+fix the conflict first and let CI run for the first time afterwards.
 
 **needs-screenshot** — the narrowest one, and it must say so: check out the
 branch, start a dev server, drive the changed screen, capture before and after,
@@ -816,8 +928,8 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
   that needs a live integration, a review that keeps dying. Read the PR after the
   third attempt rather than spending a fourth. `WORK_CACHE` should record an
   attempt count for exactly this.
-- **Drafts pile up and no ticket is ever started.** Working as designed: 2b
-  outranks 2c, so a backlog of unfinished drafts stops new work until it clears.
+- **Drafts pile up and no ticket is ever started.** Working as designed: 2c
+  outranks 2d, so a backlog of unfinished drafts stops new work until it clears.
   If that is the wrong call for a particular night, drain `WORK_CACHE` by hand
   rather than reordering the steps — the ordering is what keeps the PR list
   readable.
@@ -834,6 +946,16 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
   Then re-run the corrected test over **every** currently-promoted PR, not just
   the one the user caught: a bad test promotes in batches, and the user only
   sees the one they opened.
+- **A PR shows no CI on the commit you care about, and older green runs above
+  it.** It conflicts. GitHub runs `pull_request` workflows against a merge commit
+  of the branch into the base and cannot build one while the branch conflicts, so
+  the workflow never starts — the PR keeps whatever checks its earlier,
+  still-mergeable commits earned. Read the head commit's rollup, not the branch's
+  run history: `gh pr view <PR#> --json statusCheckRollup`. 2b now catches this,
+  but the failure is silent and looks exactly like "CI is a bit slow".
+- **Every PR reads `mergeable: UNKNOWN`.** Not a bug and not a conflict. GitHub
+  computes mergeability on demand; query again in a few seconds. Never promote on
+  `UNKNOWN` and never re-draft on it.
 - **`dev NOT refreshed` on every tick.** Somebody left `REPO` dirty or on
   another branch, so the hourly fetch keeps refusing. Every agent spawned
   meanwhile branches from whatever commit `REPO` is parked on. Clean the working
