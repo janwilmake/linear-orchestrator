@@ -1,13 +1,14 @@
 ---
 name: linear-orchestrator
-description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 5-minute loop, spawns one agent per 2.5 GB of free RAM, picks Todo tickets from Linear (a preferred assignee or unassigned first, a fallback assignee second), and spawns `cca` agents on Opus that open the PR, review it, and fix the blockers their own review found. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
+description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 5-minute loop, spawns one agent per 2.5 GB of free RAM, picks Todo tickets from Linear (a preferred assignee or unassigned first, a fallback assignee second), and spawns `cca` agents on Opus — one to write the code and open a draft PR, a second in a fresh context to review that diff and fix what the review found. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
 ---
 
 # linear-orchestrator — unattended nightly ticket runner
 
-Turns ready tickets into reviewed pull requests while nobody watches. Each PR
-arrives with the agent's own review posted on it, and the blockers from that
-review already fixed.
+Turns ready tickets into reviewed pull requests while nobody watches. One agent
+writes the code and stops. A **second agent, in a fresh context, reviews it** and
+fixes what that review found — so the reviewer reads the diff cold, without the
+assumptions the author argued itself into.
 
 **Every PR opens as a draft, and stays one until it has earned its way out** —
 a review, a fix pass over that review, and a screenshot if a user can see the
@@ -16,9 +17,9 @@ what is not a draft. The loop also finishes drafts before it starts anything new
 and picks up any PR the user marks `invalid` by putting its ticket back in the
 ready column for another pass.
 
-It still never merges anything. A review by the agent that wrote the code is the
-weakest evidence available — same model in both roles, same assumptions. The
-morning job is to read the PRs, not to fix a broken base branch.
+It still never merges anything. Two agents of the same model are still one
+model, so the review is evidence about care, not about correctness. The morning
+job is to read the PRs, not to fix a broken base branch.
 
 ## Project settings
 
@@ -34,6 +35,7 @@ and every tick read it:
 | `LO_PREFIX`           | `TICKET_PREFIX`     | ticket id prefix, e.g. `PROJ`              |
 | `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee (unassigned always eligible) |
 | `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
+| `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | the day the loop began marking its own comments; nothing older is read as feedback |
 
 Fixed, no config: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE`
 your repo's guide (`CLAUDE.md`) · `READY_STATUS` `Todo` then `Backlog` ·
@@ -44,7 +46,7 @@ never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
 `MAX_AGENTS` = `min(4, floor(ram / RAM_PER_AGENT_GB))`.
 
 **Precondition: your repo must have its own agent guide.** The prompt this skill
-hands each agent is eight short paragraphs *because* `AGENT_GUIDE` supplies the
+hands each agent is seven short paragraphs *because* `AGENT_GUIDE` supplies the
 rest — branching, local checks, the PR template, e2e testing, security. Point it
 at a repo with no such file and you get an unattended Opus agent on
 `--dangerously-skip-permissions` with almost no instructions. Write the guide
@@ -60,7 +62,7 @@ Pick by the argument you were called with.
 
 | Argument      | Mode                                             |
 | ------------- | ------------------------------------------------ |
-| none, `start` | **Start the loop** — set up the 5-minute repeat. |
+| none, `start` | **Start the loop** — arm the blocking gate.      |
 | `tick`        | **One tick** — do the work described below.      |
 | `status`      | Report what is running. Spawn nothing.           |
 | `stop`        | Stop the loop. Spawn nothing.                    |
@@ -76,18 +78,31 @@ Pick by the argument you were called with.
 3. Run **one tick immediately**, so the user sees the first agents start rather
    than waiting for proof that it works. That tick builds the queue and fills
    every slot the machine has room for.
-4. Then start the repeat **in this session, in the foreground**, so every tick
-   prints where the user can read it:
+4. Then **arm the waiter** — a `gate.sh --wait` that blocks in this session
+   until there is something to do, and wakes the model by exiting:
+
+   Bash tool, `run_in_background: true`, `dangerouslyDisableSandbox: true`:
 
    ```
-   /loop 5m /linear-orchestrator tick
+   bash "<this skill's directory>/gate.sh" --wait
    ```
 
-   Invoke the `loop` skill with those arguments. Do not detach the loop, do not
-   background it with `nohup`, and do not write the ticks to a log file the user
-   has to `tail`. The point of running it here is that the whole loop is visible:
-   each tick's line lands in the conversation as it happens, and the user can
-   interrupt, ask a question, or stop it without hunting for a pid.
+   The harness re-invokes the model when a backgrounded command exits, so the
+   waiter's exit *is* the next tick. It probes every 60s in pure shell — no
+   model, no tokens — and prints one line each time its reason changes, so the
+   user watches a live shell rather than a scroll of identical ticks. A quiet
+   night now costs nothing at all instead of a turn every 5 minutes.
+
+   Add one slow heartbeat as the safety net, because a waiter that dies takes
+   the whole loop with it. Invoke the `loop` skill with:
+
+   ```
+   /loop 1h /linear-orchestrator tick
+   ```
+
+   Do not detach either one with `nohup`, and do not write the ticks to a log
+   file the user has to `tail`. The point of running them here is that the loop
+   stays visible and the user can interrupt it without hunting for a pid.
 
 5. Tell the user the loop is live, which tickets the first agents took, and how
    to stop it.
@@ -122,8 +137,9 @@ load1=… freegb=… diskgb=… busy=… slots=N
 notes: …                 # a reap, a refused fetch, or a Linear hiccup
 world-changed: yes
 REGATE: [ … ]            # promoted PRs that stopped being mergeable / went red
+FEEDBACK: [ … ]          # comments on the loop's PRs that nobody answered yet
 INVALID: [ … ]           # PRs the user labelled invalid
-DRAFTS: [ … ]            # open loop drafts
+DRAFTS: [ … ]            # open loop drafts, none of them already in an agent's hands
 TODO-CANDIDATES: ID,ID   # eligible Todo ids from Linear (only when slots>0)
 queue: stale, rebuild before 2d
 ```
@@ -144,13 +160,28 @@ the board. Repeat that line to the user rather than reporting "no work".
 
 **On a `NO` line, end the tick here** — that is most ticks, and it costs one
 line. Report the reason the gate gave, not a bare "nothing to do".
+
+**If the waiter woke this tick, its block is already in the transcript** — read
+it, do not run `gate.sh` again. The numbers would only be seconds newer, and a
+second run overwrites the state hash the first one just set. Two lines tell you
+which case you are in: `--- woke after 21m ---` is real work, and
+`--- still nothing after 40m, re-arm ---` is the bounded wait giving up. On the
+second one, arm the next waiter and end the tick.
+
+**Every tick ends by arming the next waiter** — see step 5. `--wait` exits on
+work only. A hash that changed with nothing actionable behind it keeps the
+waiter blocked, because CI flipping on a draft the machine has no slot for is
+not worth a turn.
 Otherwise act on the block: `slots` is the count for step 2, and
-`REGATE`/`INVALID`/`DRAFTS`/`TODO-CANDIDATES` are the work. `TODO-CANDIDATES` is
+`REGATE`/`FEEDBACK`/`INVALID`/`DRAFTS`/`TODO-CANDIDATES` are the work. `TODO-CANDIDATES` is
 a pre-filtered shortlist for 2d — it applies only the cheap assignee +
 not-archived filter, so you still apply the judgment drop-rules and dedup against
 open PRs. `gate.sh` reads its settings from `.env` (see the settings table);
 `agent-codemode` must be on `PATH` or at `~/.local/node/bin/agent-codemode`, or
 the gate skips Linear and says so in `notes`.
+
+`FEEDBACK` and `REGATE` are work at any slot count, because an ack, a re-draft
+and a follow-up ticket need no agent — only the rework behind them does.
 
 When `slots` is 0 the tick still acts on a `REGATE` line — re-drafting a PR that
 can no longer merge needs no agent (the re-draft half of 2b) — then ends. Everything `gate.sh` measures and why —
@@ -163,7 +194,8 @@ Four kinds of work compete for a slot, and they are strictly ordered. **Fill
 slots from the top, and only fall to the next kind when the one above it is
 empty:**
 
-1. **Reclaim** — a PR the user marked `INVALID_LABEL`. Below.
+1. **Human feedback** — an unanswered comment on one of the loop's PRs, open or
+   merged, or a PR marked `INVALID_LABEL`. Below.
 2. **De-gate** — one of the loop's own promoted PRs that has since stopped being
    mergeable, or whose CI is red. Back to draft, fixed, re-promoted. Below.
 3. **Finish a draft** — an open draft PR with leftover work: no review, no fix
@@ -176,21 +208,70 @@ The order is the whole point. **An open PR is worth more than a new one**: it is
 already most of the way to mergeable, a human is waiting on it, and every hour it
 sits unreviewed is an hour the branch drifts from `BASE_BRANCH`. Starting a
 sixteenth ticket while fifteen drafts sit unreviewed is how a night ends with
-forty PRs and nothing a human can read. Reclaim outranks both because it is the
-only kind carrying *human* feedback, which is worth more than anything the loop
+forty PRs and nothing a human can read. Human feedback outranks both because a
+person spent attention on it, which is worth more than anything the loop
 generates on its own.
 
-#### 2a — Reclaim the PRs the user rejected
+#### 2a — Act on what a person said
 
-```bash
-gh pr list --state open --base <BASE_BRANCH> --label <INVALID_LABEL> \
-  --json number,headRefName,title
+Two signals, one step: the `FEEDBACK` line names comments nobody has answered,
+the `INVALID` line names PRs somebody labelled. Both are a human telling the loop
+something, and that outranks every conclusion the loop reached on its own.
+
+**How the loop tells a human comment from its own.** It cannot use the author:
+every agent posts through the user's own `gh`, so every comment on every PR
+carries the user's login. So the loop marks its own instead.
+
+> **Every comment the loop or one of its agents writes carries `<!-- 🌙 -->` as
+> its first line.** No exception — reviews, fix-pass replies, promotion comments,
+> de-gate notices, acks. An unmarked comment on a PR the loop opened is a person
+> talking to it.
+
+**How the loop knows it already answered one.** By its own reply, not by a local
+file. The reply to comment `<id>` starts with:
+
+```
+<!-- 🌙 ack:<id> -->
 ```
 
-`INVALID_LABEL` means the user read the PR, read the AI review and the fix pass
-on it, and was not satisfied. That is the highest-value signal this loop ever
-receives — it is the only point where a human tells it that its own judgment was
-wrong. For each one, in this order:
+The gate treats that comment as answered from then on. The record therefore lives
+on GitHub and survives a deleted cache, a `/clear`, a restart and a compaction.
+The id is load-bearing: a bare marker would let an agent's own fix-pass comment
+mask a question somebody asked while that agent was working.
+
+**Every comment gets an ack, including the ones that need no work.** The ack is
+the only thing the person sees. Without it they cannot tell the difference between
+"read and considered" and "never noticed", so a silent no-op is the one wrong
+answer. "Noted, nothing to do, and here is why" is a complete one.
+
+**Teammates count.** The scan is not limited to the user — anyone who can read the
+PR can steer the loop. It *is* limited to PRs the loop opened, so two people
+reviewing each other's own PR never wakes it.
+
+Take the entries oldest comment first. Read the comment
+(`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body`), then route it on
+the PR state the gate reported:
+
+1. **`OPEN`** — treat it exactly like a label. Re-draft the PR
+   (`gh pr ready --undo <PR#>`), ack with what you understood and what happens
+   next, and dispatch the rework with the comment **quoted verbatim** in the
+   prompt. Leave the ticket In Progress if it is already there.
+2. **`MERGED` or `CLOSED`** — the diff has shipped and there is nothing to
+   re-draft, so the answer is a ticket rather than a branch. Create it in
+   `READY_STATUS` with the comment quoted and the PR linked, and ack with the
+   ticket id. This is the case worth getting right: somebody merges, then leaves a
+   note about work the PR noticed but left out of scope, and the loop turns that
+   note into the next night's ticket.
+3. **Neither** — the comment asks a question or records something the loop should
+   know. Ack with the answer, and invent no work.
+
+A comment can also say "stop", "leave it", or "this is fine". Ack it and do
+nothing. The loop never argues with a person on a PR.
+
+##### The `invalid` label — the explicit override
+
+The label still works, and it says something a comment does not: *redo this*. It
+needs no words and it survives everything. For each PR the `INVALID` line names:
 
 1. Find the ticket. The branch name carries the id (`feature/<prefix>-431-…`), and
    the PR body links it.
@@ -254,8 +335,9 @@ human look. `WORK_CACHE` carries the counter.
 
 #### 2c — Finish the drafts
 
-Every PR this loop opens starts as a draft (step 4) and only becomes ready when
-it has all five of:
+Every PR this loop opens starts as a draft (step 4), written by an agent that
+deliberately stopped before reviewing it, and only becomes ready when it has all
+five of:
 
 - a review posted on it,
 - a fix pass over that review, with a reply comment saying what was fixed,
@@ -273,7 +355,8 @@ finished*. It never means "finished, but a human has to do something".
 
 So a PR whose five gates pass but which still needs a person — a manual test no
 agent can run, a credential nobody stored, an account that is not connected —
-**gets promoted**, with that item as the **first line** of the promotion comment:
+**gets promoted**, with that item as the **opening line** of the promotion comment
+— under the `<!-- 🌙 -->` marker, which every comment the loop writes carries:
 what is needed, why no agent can do it, and the options. Do not invent a
 human-hold state, and never leave such a PR drafted "until someone looks at it".
 
@@ -491,6 +574,26 @@ The three flags are all load-bearing:
   slot is gone after four tickets.
 - `--model opus` — resolves to Opus 5. The tickets need judgment, not typing.
 
+**Dispatching work aimed at an existing PR? Write the dispatch marker in the
+same Bash call as the spawn** — 2a, 2b and 2c all need it, a fresh ticket has no
+PR yet so it does not:
+
+```bash
+echo "<slot>" > ~/.claude/linear-orchestrator/dispatched/<PR#>
+```
+
+`cca` prints the slot it took (`agent-1 -> /Users/admin/.claude/agents/agent-1`),
+so read it from that output and write the number.
+
+The gate's live-branch test cannot see an agent that has not run `gh pr checkout`
+yet, and "yet" can be half an hour — an agent sent to answer a question reads the
+code long before it touches the branch. In that window the PR looks unattended,
+the waiter wakes on it, and a second agent lands on the same PR. The marker
+closes it: `gate.sh` treats the PR as in hand for exactly as long as that slot's
+lock is alive, then deletes the marker itself. So a dispatch needs no cleanup, an
+agent that dies frees its PR on the next probe, and one that finishes frees it
+the moment its lock goes.
+
 Read `~/.claude/skills/multiclaude/SKILL.md` if anything about `cca` is
 unclear. Two rules from it that bite here: **there is no name argument**, and
 `node_modules` is a symlink into the user's real checkout, so no agent may run
@@ -515,6 +618,12 @@ morning.
 on one, and never describe what it produced — the next tick, or the morning,
 finds out by reading the PR.
 
+**Then arm the next waiter**, as the last act of the tick — `gate.sh --wait`,
+backgrounded and unsandboxed, exactly as in "start the loop". Skip this and the
+loop falls back to the hourly heartbeat and looks stalled. Arm one waiter, never
+two: a second waiter is a second wake for the same work, and both would spawn
+against the same free slot.
+
 ### Keep the tick cheap — the loop runs in the user's session
 
 The loop runs in the foreground so the user can watch it, which means every tick
@@ -523,6 +632,8 @@ far more than the first:
 
 - **One or two lines of output per tick.** Step 1 ends most ticks, and it ends
   them in a single line. Never write a paragraph about a tick that did nothing.
+- **Let the waiter hold the quiet hours.** A tick that only reports "nothing
+  changed" is a tick that should not have happened.
 - **Project `gh` output with `--jq`** instead of pulling whole PR payloads into
   context.
 - **Read no ticket descriptions on a spawning tick** — that is what `QUEUE_CACHE`
@@ -547,8 +658,8 @@ enough, and a pasted copy goes stale the moment somebody edits the ticket.
 Restating any of that is not harmless padding. A second copy of a rule that
 changes on someone else's schedule *overrides* what the agent correctly knew.
 
-So the whole prompt is the ticket id, the branch name, and the six things that
-are true only here:
+So the whole prompt is the ticket id, the branch name, and the things that are
+true only here:
 
 > Work ticket **`<TICKET_PREFIX>-###`** end to end, unattended — read it in
 > Linear. You boot in a `cp -Rc` copy of the working checkout, which may be on
@@ -573,6 +684,10 @@ are true only here:
 > a screenshot. Start the PR body with:
 > `🌙 opened by the nightly orchestrator. Not seen by a human. Read the Decisions section before merging.`
 >
+> **Start every comment you write on the PR or the ticket with the line
+> `<!-- 🌙 -->`.** The orchestrator reads unmarked comments as a human talking to
+> it, and an unmarked comment of yours would be answered as if a person wrote it.
+>
 > If the change is visible to a user, put before/after screenshots in the body
 > under `## Screenshots`. Drive the real screen in the browser to get them, and
 > **upload them through the GitHub web UI** — open the PR on github.com, edit
@@ -583,22 +698,13 @@ are true only here:
 > Other agents are running dev servers, so take a free port in 5200–5299 and
 > point `VITE_BASE_URL` at it.
 >
-> Then run `/review <your PR number>`. **The review must land as one ordinary PR
-> comment** — `gh pr comment <PR#> --body …` — not as a GitHub review with
-> comments attached to lines in the diff. Run it in the foreground: if it
-> dispatches a background subagent, poll it rather than idling, because an idle
-> wait ends this session and kills the pending review. Then confirm with
-> `gh pr view <PR#> --json comments` that the comment is really there, and write
-> it yourself if it is not. Do not start fixing until you have seen it.
->
-> After that comment is posted, make **one** fix pass over what it found: every
-> blocker, plus the nits that are mechanical and sit inside files you already
-> changed. Leave the rest. Do not widen the diff, and do not review a second
-> time — one pass, then stop fixing. Re-run the CLAUDE.md §4 local checks, and
-> re-test in the browser any blocker whose proof was a runtime one. Push the
-> fixes as one commit of their own, then reply on the PR: what you fixed, in
-> which commit, and what you left with the reason. A PR with nothing left to fix
-> still does not get merged, and does not get taken out of draft by you.
+> **You do not review your own work, and you do not fix a review.** Stop once the
+> draft PR is open and your commits are pushed: the orchestrator then dispatches a
+> separate agent, in a fresh context, to review this diff and to fix what that
+> review finds. Do not run
+> `/review`, and do not pre-empt it by re-reading your own diff for faults — a
+> reviewer that inherits your reasoning inherits your blind spots, which is the
+> whole reason the review is somebody else's job.
 >
 > Finally comment the PR link on the ticket, leave it In Progress, and stop.
 >
@@ -614,16 +720,21 @@ of this table. Pass `gitBranchName` verbatim from the tracker rather than
 inventing a branch name: it is what makes the tracker link the PR back to the
 ticket by itself.
 
-Keep all eight paragraphs. Each covers something no file in the copy says: the
-no-confirmation rule, Decisions, the marker, the two `cca` footguns, the review
-call, the fix pass, and the closing sequence. Everything else the agent already
-has.
+Keep all seven paragraphs. Each covers something no file in the copy says: the
+no-confirmation rule, Decisions, the marker, the screenshot upload, the two `cca`
+footguns, the do-not-review rule, and the closing sequence. Everything else the
+agent already has.
 
 ### The four prompts for finishing a draft (2b and 2c)
 
 Shorter than the ticket prompt: no branching, no Decisions section, no ticket
 claim. The PR exists. Each starts with `gh pr checkout <PR#>`, and each ends
 with **leave it a draft** — only the orchestrator promotes, in 2c.
+
+**All four start every comment they write with the line `<!-- 🌙 -->`** — the
+review, the reply, the note about something found on the way. An unmarked comment
+is how the loop recognises a person, so an unmarked comment from an agent gets
+answered as one (2a).
 
 **All four end with the same teardown, and it is not optional:** close every
 Chrome tab you opened and stop the dev server you started, as the last thing you
@@ -633,11 +744,31 @@ quits. The dev server is worse: it is a detached `npm exec` child, so it
 survives the agent's own session and holds 150–200 MB that the capacity gate
 never sees. The reaper only catches an agent that dies before its teardown; if you finish normally, do this yourself.
 
-**needs-review** — the whole ticket prompt's review paragraph and fix paragraph,
-nothing else. Say the PR was opened earlier and never got its review, so it must
-be treated as unreviewed. Include the single-comment rule and the
-do-not-idle-on-the-subagent rule verbatim: those two sentences are the ones that
-were failing.
+**needs-review** — the main one, and the reason the implementer stops early. This
+agent owns the review, the fixes and the PR body, and it starts by reading a diff
+it did not write.
+
+* Say the PR was opened by another agent and has never been reviewed. It must be
+  treated as unreviewed work by an unknown author — which is what it is.
+* Run `REVIEW_COMMAND` (`/review <PR#>`), whatever that skill is configured to do
+  in this repo.
+* **The review must land as one ordinary PR comment** — `gh pr comment <PR#>
+  --body …` — not as a GitHub review with comments attached to lines in the diff.
+* Run it in the foreground: if it dispatches a background subagent, poll it rather
+  than idling, because an idle wait ends the session and kills the pending review.
+  Then confirm with `gh pr view <PR#> --json comments` that the comment is really
+  there, and write it yourself if it is not. Do not start fixing until you have
+  seen it.
+* Then **one** fix pass over what it found: every blocker, plus the nits that are
+  mechanical and sit inside files the PR already changed. Leave the rest. Do not
+  widen the diff, and do not review a second time. Re-run the `AGENT_GUIDE` local
+  checks, and re-test in the browser any blocker whose proof was a runtime one.
+  Push the fixes as one commit of their own, then reply on the PR: what was fixed,
+  in which commit, and what was left with the reason.
+* **Fix the PR body too where the diff has moved past it** — this agent is the
+  first reader the PR has had, so a body that no longer describes the code is its
+  to correct. Keep the 🌙 marker line and the `## Decisions` section; correct what
+  is wrong rather than rewriting what is merely terse.
 
 **needs-fix** — a review is already on the PR. Tell the agent where to read it
 (`gh pr view <PR#> --json comments`, or
@@ -695,6 +826,12 @@ Both rules keep the morning readable.
   never exists. Order: post, then fix, then reply what you fixed.
 - **One fix pass.** Self-review does not converge — each round finds thinner
   blockers until the night ends — and the agent holds its slot the whole time.
+- **The reviewer is a different agent, in a different context.** An author
+  reviewing its own diff has already argued itself into every choice in it, and
+  it re-reads the code with the intent it meant rather than the intent it wrote.
+  A fresh context has only the diff, the ticket and the guide — the same three
+  things a human reviewer has. It also frees the author's slot the moment the
+  draft is open, so the machine holds more work in flight.
 - **Fixing does not earn a merge.** Author and reviewer are one model, so "no
   blockers left" carries no weight; a defensible merge needs a second,
   independent agent, which this file does not do.
@@ -724,9 +861,10 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
 
 ## Mode: stop
 
-1. End the repeat: stop the `/loop` in the session that runs it. From inside that
-   session, stop the loop rather than scheduling another tick. The user can also
-   interrupt it with escape, or just say "stop the orchestrator".
+1. End the repeat: kill the waiter (`TaskStop` on the backgrounded `gate.sh
+   --wait`, or `pkill -f "gate.sh --wait"`) **and** stop the `/loop` heartbeat in
+   the session that runs it. Both, or the loop restarts itself. The user can also
+   interrupt with escape, or just say "stop the orchestrator".
 2. Delete `QUEUE_CACHE` and `WORK_CACHE`. Both are caches of a moment that has
    passed, and leaving them means the next run's first tick spawns against a
    stale picture.
