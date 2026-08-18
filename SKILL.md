@@ -46,7 +46,7 @@ never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
 `MAX_AGENTS` = `min(4, floor(ram / RAM_PER_AGENT_GB))`.
 
 **Precondition: your repo must have its own agent guide.** The prompt this skill
-hands each agent is seven short paragraphs *because* `AGENT_GUIDE` supplies the
+hands each agent is nine short paragraphs *because* `AGENT_GUIDE` supplies the
 rest — branching, local checks, the PR template, e2e testing, security. Point it
 at a repo with no such file and you get an unattended Opus agent on
 `--dangerously-skip-permissions` with almost no instructions. Write the guide
@@ -227,6 +227,28 @@ carries the user's login. So the loop marks its own instead.
 > de-gate notices, acks. An unmarked comment on a PR the loop opened is a person
 > talking to it.
 
+**The loop's own comments are collapsed. A person's are not.** Every review, every
+fix-pass reply and every de-gate notice goes inside a `<details>` whose summary
+names what is in it, so the PR page stays readable and the human comments are the
+ones that stand open:
+
+```markdown
+<!-- 🌙 -->
+<details><summary>🌙 Review — 6 findings, 2 blockers</summary>
+
+...the review...
+
+</details>
+```
+
+Leave a blank line under the `<summary>` line, or GitHub renders the markdown
+inside it raw.
+
+**Four things never collapse**, because a person has to act on them: a
+`## Blocked on` notice, the human-action line of a promotion comment, an ack, and
+anything a person wrote. When a comment carries both — an ack plus a long
+explanation — the answer stays open and the detail goes in the `<details>`.
+
 **How the loop knows it already answered one.** By its own reply, not by a local
 file. The reply to comment `<id>` starts with:
 
@@ -267,6 +289,15 @@ the PR state the gate reported:
 
 A comment can also say "stop", "leave it", or "this is fine". Ack it and do
 nothing. The loop never argues with a person on a PR.
+
+**A comment naming numbers is a ticket order.** A PR body's
+`## Out of scope & Suggestions` section numbers the follow-up work its author
+noticed and deliberately left out. So "make tickets for 2 and 4" means exactly
+that: read those numbered items out of the PR body, create one ticket each in
+`READY_STATUS` with the item quoted and the PR linked, and ack with the ticket
+ids. That numbering is the whole interface between a one-line review comment and
+the next night's work — so quote the item into the ticket rather than paraphrasing
+it, and never renumber the section.
 
 ##### The `invalid` label — the explicit override
 
@@ -374,8 +405,21 @@ gh pr list --state open --base <BASE_BRANCH> --draft \
   --json number,title,body,files,reviews,comments,commits
 ```
 
-For each draft, decide what it still needs:
+For each draft, decide what it still needs. **Check `## Blocked on` first**, and
+promote on the spot if it is there — before classifying anything else:
 
+- **blocked** — the body carries `## Blocked on`. The agent hit something no
+  agent can pass: a credential nobody stored, an account nobody connected, a
+  decision only a person can make. **Take it out of draft now**
+  (`gh pr ready <PR#>`), unfinished, unreviewed, whatever state the code is in,
+  and comment with the blocker as the opening line, never inside a `<details>`.
+
+  This is the one case that promotes without the five gates, and it is the same
+  reasoning behind them: draft means *the loop is not finished*, and a blocked PR
+  is as finished as the loop can make it. Everything else about it is noise until
+  a person acts, so a review would only bury the one line that matters. Record it
+  in `WORK_CACHE` as `blocked` and take no further action on it — a person
+  unblocks it, and their comment (2a) restarts the work.
 - **needs-mergeable** — `mergeable` is `CONFLICTING`, or CI on the head commit is
   `failing`. This one outranks the rest because **it blocks the others from being
   answerable**: GitHub builds a `pull_request` workflow against a merge commit of
@@ -411,7 +455,7 @@ For each draft, decide what it still needs:
   and drop it from the cache. This is the only place a PR becomes ready, and it
   happens on evidence, never on an agent's say-so.
 
-Order the rest: needs-mergeable first (nothing else on the PR can be trusted
+Order the rest, after blocked: needs-mergeable first (nothing else on the PR can be trusted
 while it cannot merge, and CI cannot even run), then needs-fix (a posted review
 with no fix is the most misleading state a PR can be in — it looks checked and is
 not), then needs-review, then needs-screenshot. Within a kind, oldest PR first.
@@ -676,12 +720,29 @@ true only here:
 > call in a `## Decisions` section in the PR body — the question, what you
 > chose, why, the alternative, and the cost to reverse. On a ticket with gaps,
 > an empty Decisions section is wrong. If a blocker is genuinely undecidable —
-> a missing credential, an account nobody connected — ship what you have as a
-> **draft** PR with `## Blocked on` at the top.
+> a missing credential, an account nobody connected — ship what you have with
+> `## Blocked on` as the **first thing in the body**, above everything, and never
+> inside a `<details>`. The orchestrator takes that PR out of draft on its next
+> tick, because the person who can unblock it is the one person a draft hides it
+> from.
 >
-> **Open the PR as a draft** (`gh pr create --draft`), and leave it a draft. The
-> orchestrator takes it out of draft later, once it has a review, a fix pass and
-> a screenshot. Start the PR body with:
+> **Open the draft PR before you write any code** — right after you cut the
+> branch, with one empty commit if you need something to push. Its body is the
+> marker line, whatever heading lines your repo's template puts first, and then a
+> `# Problem` section: two or three sentences on what is actually wrong, in the
+> reader's terms, and the ticket link. Nothing else yet. A PR that exists from
+> the first minute is how the orchestrator and a person can both see work in
+> flight, and writing the problem down before the solution is what keeps you
+> honest about which one you are solving.
+>
+> Then **keep the body current as you go**. By the time you stop, it must satisfy
+> the PR template and the PR skills of the repo itself — a body written for the
+> first commit is wrong by the fifth, and the body is what the reviewer reads.
+> `gh pr edit <PR#> --body-file` beats rewriting it from memory at the end.
+>
+> **It stays a draft** (`gh pr create --draft`), and you never take it out. The
+> orchestrator does that later, once it has a review, a fix pass and a
+> screenshot. Start the PR body with:
 > `🌙 opened by the nightly orchestrator. Not seen by a human. Read the Decisions section before merging.`
 >
 > **Start every comment you write on the PR or the ticket with the line
@@ -720,9 +781,10 @@ of this table. Pass `gitBranchName` verbatim from the tracker rather than
 inventing a branch name: it is what makes the tracker link the PR back to the
 ticket by itself.
 
-Keep all seven paragraphs. Each covers something no file in the copy says: the
-no-confirmation rule, Decisions, the marker, the screenshot upload, the two `cca`
-footguns, the do-not-review rule, and the closing sequence. Everything else the
+Keep all nine paragraphs. Each covers something no file in the copy says: the
+no-confirmation rule, Decisions, the PR opened first, the body kept current, the
+marker, the screenshot upload, the two `cca` footguns, the do-not-review rule,
+and the closing sequence. Everything else the
 agent already has.
 
 ### The four prompts for finishing a draft (2b and 2c)
@@ -735,6 +797,12 @@ with **leave it a draft** — only the orchestrator promotes, in 2c.
 review, the reply, the note about something found on the way. An unmarked comment
 is how the loop recognises a person, so an unmarked comment from an agent gets
 answered as one (2a).
+
+**And all four collapse what they write**, inside a `<details>` with a summary
+that names the contents (`🌙 Review — 6 findings, 2 blockers`, `🌙 Fix pass —
+commit a1b2c3d, 6 of 6`). A blank line under the `<summary>` line, or the
+markdown inside comes out raw. The reader should be able to scroll a PR and see
+only the human voices.
 
 **All four end with the same teardown, and it is not optional:** close every
 Chrome tab you opened and stop the dev server you started, as the last thing you
