@@ -7,67 +7,83 @@ overnight and hands you a morning of pull requests to read.
 
 ![How it works: you write a ticket, the gate waits for free memory, agents write the code, a fresh agent reviews it, and you get a PR to read](./hero.svg)
 
-## What you stop doing
+## What makes it different
 
-**You stop talking to agents.** There is no chat window to steer, no context to
-re-explain, no session to catch up on. You write a ticket in Linear and you read a
-pull request in GitHub. To change the direction of the work you leave a **comment
-on the PR** — and the loop reads it, answers it by name, and acts on it. That
-works on a merged PR too, which is where it earns its keep: merge, note the
-follow-up work the PR spotted but left out of scope, and the loop turns your note
-into the next ticket by itself. No label to remember. Teammates can steer it the
-same way, on purpose.
+**The whole interface is two surfaces.** A ticket in Linear, and a comment on a
+pull request. There is no chat window to steer, no label to remember, no plan to
+approve inside the tracker. To change the direction of the work you comment on the
+PR, and the loop reads it, answers it by name, and acts on it. That works on a
+**merged** PR too, which is where it earns its keep: merge, note the follow-up work
+the PR spotted but left out of scope, and the loop turns your note into the next
+ticket by itself. Teammates can steer it the same way, on purpose.
 
-**You stop rationing the machine.** The loop measures free memory, load and disk
-every minute and runs as much parallel work as the machine can actually hold —
-one agent per `LO_RAM_PER_AGENT` gigabytes of real free memory, re-measured every
-probe. When there is nothing to do it costs nothing at all: the gate blocks in
-pure shell and wakes the model only when work exists.
+**Draft means something.** A PR leaves draft only on evidence — a review, a fix
+pass over that review, a screenshot when a user can see the change, no merge
+conflict, and CI green on the head commit. It never leaves draft on an agent's
+say-so. So what is not a draft in the morning is what is actually ready, and the
+drafts are the pile you can ignore until you have time.
 
-**You stop reading transcripts to find the decision.** Every judgment call an
-agent made, the evidence behind it and the screenshots of what changed land on the
-PR — under `## Decisions`, in the review comment, in the fix-pass reply. The diff
-carries its own argument, so the review is the artifact and the chat log is
-nothing you need.
+**Idle costs nothing.** Nothing runs until there is work. The gate probes
+capacity, your open PRs and the Linear ready column every 60 seconds **in pure
+shell** — no model call, no turn started. A night with an empty board costs
+nothing at all, not "not much".
+
+**It runs on your machine, on the Claude you already pay for.** No hosted sandbox,
+no per-session credit, no repo access granted to a third party. That also means it
+uses whatever the machine has: it measures free memory every probe and runs as many
+agents as will really fit — one per `LO_RAM_PER_AGENT` gigabytes — so parallelism
+is bounded by your laptop rather than by a plan.
+
+**It never merges.** Author and reviewer are the same model, so "no blockers left"
+is evidence about care, not proof of correctness. The loop stops at a reviewed,
+non-draft PR and leaves the merge to a person. That is a choice, not a missing
+feature.
 
 ## What it does, in order
 
-1. **A gate blocks until there is work** — capacity, your PRs, the Linear ready
-   column. It probes every 60 seconds in pure shell, so a quiet night spends no
-   tokens and starts no turns.
-2. **An agent takes the ticket**, moves it to In Progress, branches, writes the
-   code, tests it in a real browser, and opens a **draft** PR. Then it stops.
+1. **The gate blocks until there is work** — capacity, your PRs, the Linear ready
+   column.
+2. **An agent takes the ticket**, moves it to In Progress, branches, opens the
+   draft PR before it writes any code, writes the code, tests it in a real browser,
+   and stops.
 3. **A second agent reviews that PR in a fresh context** — it has the diff, the
    ticket and your repo's agent guide, and none of the reasoning the author talked
    itself into. It posts the review as one comment, makes exactly one fix pass over
    what it found, and corrects the PR body where the diff moved past it.
-4. **The PR leaves draft only on evidence**: a review, a fix pass over it, a
-   screenshot when a user can see the change, no merge conflict, and CI green on
-   the head commit. Draft is therefore the honest signal — what is ready in the
-   morning is what is not a draft.
+4. **The PR leaves draft on the five gates**, or stays a draft.
 5. **Your comment re-opens any of it.** An unanswered comment on one of its PRs
    outranks every other kind of work on the next tick.
 
-It never merges, never pushes to your base branch, and never writes to
-production. Two agents of the same model are still one model, so the review is
-evidence about care, not proof of correctness. The morning job is to read the PRs.
+Every agent gets its own repo clone, Terminal window and **real Chrome**, which is
+why front-end tickets work here: the screenshots on the PR come from driving the
+actual screen, not from a headless guess.
 
-The mechanics behind steps 1 and 5 — the gate, and how the loop separates your
-comments from its own — are in [`HOW-IT-WORKS.md`](./HOW-IT-WORKS.md).
+The mechanics — the shell gate, and how the loop tells your comments from its own —
+are in [`HOW-IT-WORKS.md`](./HOW-IT-WORKS.md).
+
+## Who this is for
+
+People who already run coding agents locally and would rather spend a machine than
+a per-seat credit. The install is honestly longer than "connect GitHub", and the
+constraints are real:
+
+- **macOS only, and Claude only.** It drives Claude (Opus) agents through
+  [`multiclaude`](https://github.com/janwilmake/multiclaude) and reads Linear
+  through [`agent-codemode`](https://github.com/janwilmake/agent-codemode), which
+  reads its OAuth from the macOS Keychain.
+- **One machine.** Parallelism caps at what one laptop's memory holds.
+- **`--dangerously-skip-permissions` is required.** The agents run unattended with
+  permission prompts off. That is the point, and it is also the risk — give the
+  loop a repo where the worst an agent can do is open a bad PR.
+- **Your repo needs its own agent guide** (`CLAUDE.md`). The prompt handed to each
+  agent is short *because* the guide supplies branching, local checks, the PR
+  template, testing and security.
 
 ## Install and run
 
-**macOS only, and Claude-only.** It drives Claude (Opus) agents through
-[`multiclaude`](https://github.com/janwilmake/multiclaude) and reads Linear
-through [`agent-codemode`](https://github.com/janwilmake/agent-codemode), which
-needs the macOS Keychain. You also need `gh` (authenticated), `jq`, and the
-[Linear MCP server](https://linear.app/docs/mcp) connected to the session that
-runs the loop.
-
-`cca`, from `multiclaude`, is what gives each agent its own repo clone, Terminal
-window and **Chrome instance** — the reason the work runs through `cca` and not
-Claude Code subagents, which would share one browser session and fight over the
-same tabs. This skill depends on it and does not ship it.
+You also need `gh` (authenticated), `jq`, and the
+[Linear MCP server](https://linear.app/docs/mcp) connected to the session that runs
+the loop.
 
 ```bash
 git clone https://github.com/janwilmake/linear-orchestrator.git \
@@ -76,8 +92,7 @@ cd ~/.claude/skills/linear-orchestrator
 cp .env.example .env && $EDITOR .env
 ```
 
-Then start it from your repo, in a session launched with
-`--dangerously-skip-permissions`:
+Then start it from your repo:
 
 ```bash
 cd /path/to/your/repo
@@ -90,22 +105,6 @@ claude --dangerously-skip-permissions
 
 `status` reports what is running; `stop` ends the loop and lists the PRs it
 produced.
-
-Three things to know before the first night:
-
-- **The flag is required.** Without it every `cca` call, and the git and `gh`
-  commands inside each agent, stops on a permission prompt nobody is awake to
-  answer, and the loop stalls on the first tick.
-- **Your repo must have its own agent guide** (`CLAUDE.md`). The prompt handed to
-  each agent is short *because* the guide supplies branching, local checks, the PR
-  template, testing and security. Point the loop at a repo with no guide and you
-  get an unattended agent with almost no instructions. Give it a repo where the
-  worst an agent can do is open a bad PR.
-- **`LO_RAM_PER_AGENT` is a divisor, not a threshold.** Every tick spawns
-  `free memory / LO_RAM_PER_AGENT` agents. The default of 2.5 assumes one Claude
-  session, one dev server and one Chrome; a stack with Docker or a local database
-  costs far more, and the probe cannot detect that. Set it too low and the loop
-  over-spawns until the machine swaps.
 
 ## Configure with `.env`, not the skill file
 
@@ -123,6 +122,11 @@ LO_TIER2="Fallback Assignee"   # display name
 LO_RAM_PER_AGENT="2.5"         # GB per agent (claude + vite + chrome)
 LO_FEEDBACK_SINCE="2026-08-18T17:00:00Z"   # the day you installed this
 ```
+
+`LO_RAM_PER_AGENT` is the one people get wrong: it is a divisor, not a threshold.
+Every tick spawns `free memory / LO_RAM_PER_AGENT` agents. The default assumes one
+Claude session, one dev server and one Chrome — a stack with Docker or a local
+database costs far more, and the probe cannot detect that.
 
 Both `gate.sh` and the tick read these, so there is nothing to edit inside
 `SKILL.md`.
