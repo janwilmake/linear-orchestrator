@@ -31,7 +31,7 @@ AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.lo
 stamp=~/.claude/linear-orchestrator/last-fetch
 notes=""
 if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -f %m "$stamp") )) -gt 3600 ]; then
-  if [ -z "$(git -C $REPO status --porcelain)" ] \
+  if [ -z "$(git -C $REPO status --porcelain --untracked-files=no)" ] \
      && [ "$(git -C $REPO branch --show-current)" = "$BASE" ]; then
     before=$(git -C $REPO rev-parse --short HEAD)
     git -C $REPO pull --ff-only --quiet origin $BASE 2>/dev/null
@@ -95,7 +95,7 @@ verdicts=$(printf '%s' "$prs" | jq -c '[ .[] | {
 
 regate=$(printf '%s' "$verdicts" | jq -c '[ .[] | select(.draft==false and .mine)
           | select(.merge=="CONFLICTING" or .ci=="failing") ]')
-invalid=$(printf '%s' "$verdicts" | jq -c '[ .[] | select(.invalid) | .pr ]')
+invalid=$(printf '%s' "$verdicts" | jq -c '[ .[] | select(.invalid and .mine) | .pr ]')
 drafts=$(printf '%s' "$verdicts" | jq -c '[ .[] | select(.draft) | .pr ]')
 
 n_regate=$(printf '%s' "$regate"  | jq 'length')

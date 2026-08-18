@@ -536,8 +536,12 @@ So the whole prompt is the ticket id, the branch name, and the six things that
 are true only here:
 
 > Work ticket **`<TICKET_PREFIX>-###`** end to end, unattended — read it in
-> Linear, and branch as `<gitBranchName>`. Nobody is awake, so never stop to
-> ask. Where CLAUDE.md wants confirmation, that means **do not do it**: no
+> Linear. You boot in a `cp -Rc` copy of the working checkout, which may be on
+> another branch and carry its uncommitted files, so cut your branch from a
+> clean, current base: `git fetch origin && git checkout -f -B <gitBranchName>
+> origin/<BASE_BRANCH>`. That `-f` is the one place you discard uncommitted
+> changes despite CLAUDE.md — your copy is throwaway and the real checkout keeps
+> every change, so nothing is lost. Nobody is awake, so never stop to ask. Where CLAUDE.md wants confirmation, that means **do not do it**: no
 > merge, no push to `dev`/`main`, no write to production. Production steps go
 > in the Post-merge runbook.
 >
