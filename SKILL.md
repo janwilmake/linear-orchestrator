@@ -408,7 +408,12 @@ gh pr list --state open --base <BASE_BRANCH> --draft \
 For each draft, decide what it still needs. **Check `## Blocked on` first**, and
 promote on the spot if it is there — before classifying anything else:
 
-- **blocked** — the body carries `## Blocked on`. The agent hit something no
+- **blocked** — the body carries `## Blocked on` **as a heading on its own line,
+  near the top**. Test it as a line that begins with the heading (`grep -E '^## Blocked
+  on'`), never as a substring: a PR that writes *about* the convention — a docs change,
+  a Decisions entry, this file — mentions the words inside a sentence or in backticks,
+  and a substring test promotes it unreviewed. Seen on a real run.
+  The agent hit something no
   agent can pass: a credential nobody stored, an account nobody connected, a
   decision only a person can make. **Take it out of draft now**
   (`gh pr ready <PR#>`), unfinished, unreviewed, whatever state the code is in,
