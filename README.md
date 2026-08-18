@@ -89,8 +89,12 @@ agents no matter what the cap says.
   Without it the gate still runs, but skips the Linear check and says so.
 - **`cca`**, from the
   [`multiclaude`](https://github.com/janwilmake/multiclaude) skill — it gives each
-  agent its own repo copy, Terminal window and Chrome session. This skill depends
-  on it and does not ship it.
+  agent its own **repo clone, Terminal window and Chrome instance**. That Chrome
+  instance is the reason the work runs through `cca` and **not** Claude Code
+  subagents: every agent screenshots its PR by driving a real browser, and
+  subagents share the one MCP/Chrome session of their parent, so several of them
+  would fight over the same tabs. `cca` isolates each agent end to end. This
+  skill depends on it and does not ship it.
 - **The Linear MCP server**, connected to the session that runs the loop.
 - **`gh`**, authenticated, and **`jq`**.
 
@@ -107,11 +111,22 @@ cd ~/.claude/skills/linear-orchestrator
 cp .env.example .env && $EDITOR .env
 ```
 
-Then start it from your repo:
+Then start it from your repo — in a Claude session launched with
+`--dangerously-skip-permissions`:
 
+```bash
+cd /path/to/your/repo
+claude --dangerously-skip-permissions
+```
 ```
 /linear-orchestrator
 ```
+
+**The `--dangerously-skip-permissions` flag is required.** The loop spawns `cca`
+agents unattended overnight; without it, every `cca` call — and the git and `gh`
+commands inside each agent — stops on a permission prompt that nobody is awake to
+answer, and the loop stalls on the first tick. (The agents `cca` spawns already
+run with it; this is about the session that runs the loop itself.)
 
 `status` reports what is running; `stop` ends the loop and lists the PRs it
 produced.
