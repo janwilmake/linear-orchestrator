@@ -3,6 +3,13 @@
 A [Claude Code](https://claude.com/claude-code) skill that turns ready Linear
 tickets into reviewed pull requests while nobody watches.
 
+> **macOS only, and Claude-only.** It is a Claude Code skill that drives Claude
+> (Opus) agents through [`multiclaude`](https://github.com/janwilmake/multiclaude)
+> and reads Linear through
+> [`agent-codemode`](https://github.com/janwilmake/agent-codemode). It is not
+> model-agnostic, and not portable off macOS — the agent runner needs macOS, and
+> the Linear token is read from the macOS Keychain.
+
 It runs on a 5-minute loop, in the foreground, so you can watch each tick land
 in the terminal. Each tick measures free memory first and spawns one agent per
 `RAM_PER_AGENT_GB` of it (default 2.5), so the machine reaches full concurrency
@@ -77,12 +84,13 @@ agents no matter what the cap says.
 
 - **macOS.** The agent runner needs `open -a Terminal` and APFS `cp -Rc`; the
   Linear OAuth token is read from the macOS Keychain.
-- **`agent-codemode`**, on `PATH` (or at `~/.local/node/bin/agent-codemode`) —
-  `github:janwilmake/agent-codemode`. The gate uses it to read Linear. Without
-  it the gate still runs, but skips the Linear check and says so.
-- **`cca`**, from the `multiclaude` skill — it gives each agent its own repo copy,
-  Terminal window and Chrome session. This skill depends on it and does not ship
-  it.
+- **[`agent-codemode`](https://github.com/janwilmake/agent-codemode)**, on `PATH`
+  (or at `~/.local/node/bin/agent-codemode`). The gate uses it to read Linear.
+  Without it the gate still runs, but skips the Linear check and says so.
+- **`cca`**, from the
+  [`multiclaude`](https://github.com/janwilmake/multiclaude) skill — it gives each
+  agent its own repo copy, Terminal window and Chrome session. This skill depends
+  on it and does not ship it.
 - **The Linear MCP server**, connected to the session that runs the loop.
 - **`gh`**, authenticated, and **`jq`**.
 
