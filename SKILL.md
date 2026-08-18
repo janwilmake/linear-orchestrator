@@ -115,7 +115,7 @@ are denied inside the sandbox (`Operation not permitted`). `gate.sh` does
 everything below in one shot — the hourly base-branch refresh, the reaper, the
 capacity math, the promoted-PR REGATE check, and a **Linear ready-column check**
 through the `agent-codemode` CLI (which inherits Claude Code's Linear OAuth, so
-no token and no model) — and prints either `NO` or a compact context block:
+no token and no model) — and prints either a `NO` line or a compact context block:
 
 ```
 load1=… freegb=… diskgb=… busy=… slots=N
@@ -128,7 +128,22 @@ TODO-CANDIDATES: ID,ID   # eligible Todo ids from Linear (only when slots>0)
 queue: stale, rebuild before 2d
 ```
 
-**On `NO`, end the tick here** — that is most ticks, and it costs one line.
+The `NO` line carries its own reason, so a quiet tick still says what it was
+quiet about:
+
+```
+NO - no slot: ram 2.1gb free, 2.5gb per agent, busy=1; 1 draft(s) waiting; linear not read
+NO - slots=1, nothing to take; no drafts; linear ready column empty
+```
+
+**`linear not read` is literal.** The gate queries Linear only when a slot
+exists, so at `slots=0` a ticket somebody just moved to `Todo` is invisible to
+it. That is deliberate — a ticket the machine cannot start is not worth a
+subprocess every 5 minutes — but it means a `NO` at `slots=0` says nothing about
+the board. Repeat that line to the user rather than reporting "no work".
+
+**On a `NO` line, end the tick here** — that is most ticks, and it costs one
+line. Report the reason the gate gave, not a bare "nothing to do".
 Otherwise act on the block: `slots` is the count for step 2, and
 `REGATE`/`INVALID`/`DRAFTS`/`TODO-CANDIDATES` are the work. `TODO-CANDIDATES` is
 a pre-filtered shortlist for 2d — it applies only the cheap assignee +

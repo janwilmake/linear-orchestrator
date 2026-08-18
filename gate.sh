@@ -151,7 +151,33 @@ work=no
 [ -n "$notes" ] && work=yes                   # a reap or a refused fetch is worth a line
 
 if [ "$work" = no ] && [ "$hash" = "$prev" ]; then
-  echo "NO"
+  # Say WHY there is nothing to wake for. A bare "NO" hides the difference
+  # between "the board is empty" and "the board has work the machine cannot
+  # start", and those two want opposite responses from the user.
+  # No extra calls: every number below is already measured above.
+  if [ "$slots" -eq 0 ]; then
+    bycap=$(( max_agents - busy ))
+    if awk -v l=$load -v c=$cores 'BEGIN{exit !(l > c*0.7)}'; then
+      why="load $load over $(awk -v c=$cores 'BEGIN{printf "%.1f", c*0.7}')"
+    elif [ "$diskgb" -lt 10 ]; then
+      why="disk ${diskgb}gb free, under 10"
+    elif [ "$bycap" -le 0 ]; then
+      why="all $max_agents agent slots busy"
+    else
+      why="ram ${freegb}gb free, ${RAM_PER_AGENT}gb per agent, busy=$busy"
+    fi
+    why="no slot: $why"
+    [ "$n_drafts" -gt 0 ] && why="$why; $n_drafts draft(s) waiting"
+    # Linear is queried only when a slot exists, so at slots=0 a new ticket is
+    # invisible to this gate by design. Say so, or the NO reads as "no work".
+    why="$why; linear not read"
+  else
+    why="slots=$slots, nothing to take"
+    [ "$n_drafts" -eq 0 ] && why="$why; no drafts"
+    if [ -z "$todo_ids" ]; then why="$why; linear ready column empty"
+    else why="$why; same todo ids as last tick"; fi
+  fi
+  echo "NO - $why"
   exit 0
 fi
 
