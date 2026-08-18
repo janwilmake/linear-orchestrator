@@ -96,14 +96,6 @@ Do not gate on the clock. The user starts the loop when they stop working and
 stops it in the morning; a hardcoded night window would break every daytime
 test run.
 
-**Why 5 minutes and not 15.** An agent finishes somewhere between 10 minutes
-and an hour, and a slot that frees up right after a tick is a slot the machine
-idles through until the next one. At 15 minutes that wasted about 7 minutes per
-completed agent and, worse, meant the loop crawled back up to full concurrency
-one agent at a time. Five minutes is affordable only because of the queue cache
-below: a tick with no free slot costs one `bash` call and one line of output,
-and a tick that spawns reads no ticket descriptions at all.
-
 ---
 
 ## Mode: one tick
@@ -219,9 +211,7 @@ ticket the agent reads.
 #### 2b — De-gate the promoted PRs that went stale
 
 **Every merge into `BASE_BRANCH` can invalidate a PR that was already promoted.**
-Nothing in the loop used to notice, so PRs accumulated conflicts and sat in the
-human's ready list unmergeable. This step is the fix, and it is cheap enough to
-run on every tick.
+This step catches that, and is cheap enough to run on every tick.
 
 Act on the `REGATE` line from step 1. For each PR it names:
 
@@ -239,8 +229,7 @@ Act on the `REGATE` line from step 1. For each PR it names:
    prompt. Steps 1–4 need no slot; only this one does.
 
 **Only ever touch PRs the loop itself opened.** The test is the `🌙` marker in
-the body, which is why the step 1 query filters on it. On this repo 8 of 51 open
-PRs conflicted at one point and 3 of those 8 were the user's own work — silently
+the body, which is why the step 1 query filters on it. Silently
 re-drafting a human's PR is not the loop's business.
 
 **Cap the attempts at 3.** A PR can conflict, get fixed, get promoted, and
@@ -274,9 +263,7 @@ what is needed, why no agent can do it, and the options. Do not invent a
 human-hold state, and never leave such a PR drafted "until someone looks at it".
 
 Drafting it achieves the opposite of the intent: the person who must act is the
-one person the draft hides it from. One run kept a PR drafted for hours on
-exactly this mistake — every gate green, waiting on one manual alias test the
-user had asked for — while the user read the ready list and never saw it. The
+one person the draft hides it from. The
 PR template's **Needs human verification** section carries the same fact for
 whoever reads the diff.
 
@@ -296,23 +283,17 @@ For each draft, decide what it still needs:
   answerable**: GitHub builds a `pull_request` workflow against a merge commit of
   the branch into the base, and it cannot build that commit while the branch
   conflicts — so a conflicted PR does not run CI at all, and its checks stay
-  silent rather than red. One run hit exactly this: a reworked PR showed two
-  green CI runs from two days earlier and none on the commit under review,
-  because the branch had begun conflicting in between.
+  silent rather than red.
   `mergeable == "UNKNOWN"` is **not** this state — it is "ask again next tick".
 - **needs-review** — no review-shaped comment from the loop **dated after the
   head commit**. The test is the order, not the mere existence: an agent that
   pushes code and dies before running `/review` leaves a PR carrying an *older*
-  review, and a test for "is there a review?" reads that as done. One run hit
-  this exactly — a rework was pushed, the agent died before reviewing, and the PR
-  sat `MERGEABLE`, green and screenshotted, looking finished with unreviewed code
-  in it. Compare timestamps: `.comments[].createdAt` against
+  review, and a test for "is there a review?" reads that as done. Compare timestamps: `.comments[].createdAt` against
   `.commits[-1].committedDate`.
 - **needs-fix** — a review exists, but no commit after it and no reply comment.
   The mirror image of the case above, and both are found by the same comparison.
 - **needs-screenshot** — it touches a user-visible file and the body carries no
-  screenshot. On this repo a user-visible file means `app/routes/**`,
-  `app/components/**`, or a non-`.server` `.tsx` under `app/`. That half is
+  screenshot. A user-visible file means a route, a component, or a non-`.server` UI file. That half is
   deliberately generous: it catches PRs whose UI files are incidental, and a
   false positive costs one agent, while a false negative ships an unreviewable
   UI change.
@@ -321,12 +302,7 @@ For each draft, decide what it still needs:
   a URL containing `user-attachments`, not ending in `.svg`. Do not accept
   `raw.githubusercontent.com`: that serves files **out of the repository**, so
   matching it would pass a screenshot somebody committed, which is the one
-  outcome this must not reward. Do not test for `![` or `<img` on their own. CI bots inject `<img>` badges into PR
-  bodies — this repo's `blacksmith.sh` "View with codesmith" and "Autofix"
-  badges are two `<img>` tags of SVG on a third-party host — and a bare
-  `<img>` test reads those as proof the author screenshotted the feature. Three
-  PRs were promoted to ready on exactly that mistake, one of which the user then
-  had to re-draft by hand. `.svg` is the tell: screenshots are PNG or JPEG,
+  outcome this must not reward. Do not test for `![` or `<img` alone: CI bots inject `<img>` SVG badges from third-party hosts, and a bare `<img>` reads as a screenshot. `.svg` is the tell: screenshots are PNG or JPEG,
   badges are SVG.
 
   A `## Screenshots` heading is good practice and the agent prompts ask for it,
@@ -395,10 +371,7 @@ list_issues(team: TRACKER_TEAM, state: READY_STATUS, includeArchived: false,
 
 **`includeArchived` defaults to `true`, so pass `false` explicitly.** An archived
 ticket looks exactly like a live one in the result — same status, same priority,
-same assignee — and nothing in the row says "archived" unless you asked for
-`archivedAt`. One run surfaced an **Urgent** ticket archived three weeks earlier
-as the top candidate, and only a `get_issue` before claiming caught it. Pass the
-flag, and treat a non-null `archivedAt` as a drop.
+same assignee — and nothing in the row says "archived" unless you asked for `archivedAt`. Pass the flag, and treat a non-null `archivedAt` as a drop.
 
 Note also that `state:` matches the status **type**, not the column name. Asking
 for `Backlog` returns every backlog-type status — on this workspace that means
@@ -639,9 +612,7 @@ do. Tabs are scoped per MCP session, so a tab an agent abandons cannot be closed
 by the orchestrator or by any other agent — it simply sits there until Chrome
 quits. The dev server is worse: it is a detached `npm exec` child, so it
 survives the agent's own session and holds 150–200 MB that the capacity gate
-never sees. Step 1's reaper exists because agents used to skip this, and it
-still has to, for the agent that dies before reaching its teardown — but an
-agent that finishes normally must not leave that work to the reaper.
+never sees. The reaper only catches an agent that dies before its teardown; if you finish normally, do this yourself.
 
 **needs-review** — the whole ticket prompt's review paragraph and fix paragraph,
 nothing else. Say the PR was opened earlier and never got its review, so it must
