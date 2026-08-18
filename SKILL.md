@@ -1,9 +1,9 @@
 ---
-name: orchestrate-linear
+name: linear-orchestrator
 description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 5-minute loop, spawns one agent per 2.5 GB of free RAM, picks Todo tickets from Linear (a preferred assignee or unassigned first, a fallback assignee second), and spawns `cca` agents on Opus that open the PR, review it, and fix the blockers their own review found. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
 ---
 
-# orchestrate-linear — unattended nightly ticket runner
+# linear-orchestrator — unattended nightly ticket runner
 
 Turns ready tickets into reviewed pull requests while nobody watches. Each PR
 arrives with the agent's own review posted on it, and the blockers from that
@@ -22,30 +22,32 @@ morning job is to read the PRs, not to fix a broken base branch.
 
 ## Project settings
 
-Everything project-specific lives here. The rest of the file refers to these
-names, so pointing the skill at another repo means editing this table and
-nothing else.
+The values that change per user live in **`.env`** beside this skill — copy
+`.env.example`, fill it in, and it stays out of the repo (gitignored). `gate.sh`
+sources it, and a tick reads it too. The rows below marked *(.env)* come from
+there; the rest are fixed. So pointing the skill at another repo is editing
+`.env`, nothing in this file.
 
 | Setting             | Value                                                                                   |
 | ------------------- | --------------------------------------------------------------------------------------- |
-| `REPO`              | `/path/to/your/repo`                                                                    |
-| `AGENT_GUIDE`       | `CLAUDE.md` — §2.6 lists what needs confirmation, §2.8 the ticket status rule            |
+| `REPO`              | *(.env `LO_REPO`)* — local checkout the agents clone from                               |
+| `AGENT_GUIDE`       | your repo's agent guide (e.g. `CLAUDE.md`) — what needs confirmation, the status rule    |
 | `TRACKER`           | Linear MCP                                                                              |
-| `TRACKER_TEAM`      | `Hyre Ops`                                                                              |
-| `TICKET_PREFIX`     | `HYR2`                                                                                  |
+| `TRACKER_TEAM`      | *(.env `LO_TEAM`)* — Linear team name                                                   |
+| `TICKET_PREFIX`     | *(.env `LO_PREFIX`)* — e.g. `PROJ`                                                      |
 | `READY_STATUS`      | `Todo`, then `Backlog` once no `Todo` ticket is eligible                                 |
 | `CLAIMED_STATUS`    | `In Progress`                                                                           |
-| `ASSIGNEE_TIER_1`   | Preferred assignee (`you@example.com`), or unassigned                                   |
-| `ASSIGNEE_TIER_2`   | Fallback assignee (`colleague@example.com`)                                             |
-| `BASE_BRANCH`       | `dev`                                                                                   |
+| `ASSIGNEE_TIER_1`   | *(.env `LO_TIER1`)* — preferred assignee display name, or unassigned                    |
+| `ASSIGNEE_TIER_2`   | *(.env `LO_TIER2`)* — fallback assignee display name                                    |
+| `BASE_BRANCH`       | *(.env `LO_BASE`)* — default `dev`                                                      |
 | `FORGE`             | GitHub, via `gh`                                                                        |
 | `DEV_SERVER`        | Vite — free port in 5200–5299, with `VITE_BASE_URL` pointed at it                       |
-| `RAM_PER_AGENT_GB`  | `2.5` — one `claude` + one Vite server + one Chrome. On 8 GB that caps `MAX_AGENTS` at 3 |
+| `RAM_PER_AGENT_GB`  | *(.env `LO_RAM_PER_AGENT`)* — default `2.5` (one `claude` + Vite + Chrome). 8 GB caps `MAX_AGENTS` at 3 |
 | `PROD_SURFACES`     | Railway prod variables and service config, prod data, third-party dashboards on prod    |
 | `REVIEW_COMMAND`    | `/review <PR#>`                                                                         |
 | `INVALID_LABEL`     | `invalid` — the user puts this on a PR whose AI review-and-fix pass did not satisfy them |
-| `QUEUE_CACHE`       | `~/.claude/orchestrate-linear/HYR2-queue.json` — one file per `TICKET_PREFIX`            |
-| `WORK_CACHE`        | `~/.claude/orchestrate-linear/HYR2-work.json` — leftover work on already-open draft PRs  |
+| `QUEUE_CACHE`       | `~/.claude/linear-orchestrator/<PREFIX>-queue.json` — one file per `TICKET_PREFIX`        |
+| `WORK_CACHE`        | `~/.claude/linear-orchestrator/<PREFIX>-work.json` — leftover work on already-open draft PRs |
 
 **Before porting this to another repo, check the precondition:** that repo must
 have its own agent guide. The prompt in this skill is four short paragraphs
@@ -80,20 +82,18 @@ Pick by the argument you were called with.
 3. Run **one tick immediately**, so the user sees the first agents start rather
    than waiting for proof that it works. That tick builds the queue and fills
    every slot the machine has room for.
-4. Then start the repeat — **one process per tick**, detached, so no transcript
-   ever accumulates:
+4. Then start the repeat **in this session, in the foreground**, so every tick
+   prints where the user can read it:
 
-   ```bash
-   cd <REPO> && nohup zsh -c 'while true; do
-     claude -p "/orchestrate-linear tick" --dangerously-skip-permissions \
-       >> ~/.claude/orchestrate-linear/tick.log 2>&1
-     sleep 300
-   done' >/dev/null 2>&1 &
+   ```
+   /loop 5m /linear-orchestrator tick
    ```
 
-   Each tick's report lands in `tick.log`; `tail -f` it to watch the night.
-   Running it as `/loop 5m /orchestrate-linear tick` inside a session works too
-   and is easier to watch, but that session carries every tick it has ever run.
+   Invoke the `loop` skill with those arguments. Do not detach the loop, do not
+   background it with `nohup`, and do not write the ticks to a log file the user
+   has to `tail`. The point of running it here is that the whole loop is visible:
+   each tick's line lands in the conversation as it happens, and the user can
+   interrupt, ask a question, or stop it without hunting for a pid.
 
 5. Tell the user the loop is live, which tickets the first agents took, and how
    to stop it.
@@ -124,15 +124,42 @@ one `bash` call and one line of output — that is what makes a 5-minute loop
 cheap enough to run all night. The reaper below shares that one call, and adds
 a line only on the ticks where it actually killed something.
 
-Run this probe **outside the Bash sandbox** (`dangerouslyDisableSandbox: true`).
-`sysctl` and the lock files under `~/.claude/` are both denied inside it — the
-sandboxed call fails with `Operation not permitted`, so go straight to the
-unsandboxed one.
+**Run the gate, do not inline it.** The one `bash` call this step needs is
+`bash "<this skill's directory>/gate.sh"`, **outside the Bash sandbox**
+(`dangerouslyDisableSandbox: true`) — `sysctl` and the `~/.claude/` lock files
+are denied inside the sandbox (`Operation not permitted`). `gate.sh` does
+everything below in one shot — the hourly base-branch refresh, the reaper, the
+capacity math, the promoted-PR REGATE check, and a **Linear ready-column check**
+through the `agent-codemode` CLI (which inherits Claude Code's Linear OAuth, so
+no token and no model) — and prints either `NO` or a compact context block:
+
+```
+load1=… freegb=… diskgb=… busy=… slots=N
+notes: …                 # a reap, a refused fetch, or a Linear hiccup
+world-changed: yes
+REGATE: [ … ]            # promoted PRs that stopped being mergeable / went red
+INVALID: [ … ]           # PRs the user labelled invalid
+DRAFTS: [ … ]            # open loop drafts
+TODO-CANDIDATES: ID,ID   # eligible Todo ids from Linear (only when slots>0)
+queue: stale, rebuild before 2d
+```
+
+**On `NO`, end the tick here** — that is most ticks, and it costs one line.
+Otherwise act on the block: `slots` is the count for step 2, and
+`REGATE`/`INVALID`/`DRAFTS`/`TODO-CANDIDATES` are the work. `TODO-CANDIDATES` is
+a pre-filtered shortlist for 2d — it applies only the cheap assignee +
+not-archived filter, so you still apply the judgment drop-rules and dedup against
+open PRs. `gate.sh` reads its settings from `.env` (see the settings table);
+`agent-codemode` must be on `PATH` or at `~/.local/node/bin/agent-codemode`, or
+the gate skips Linear and says so in `notes`.
+
+The commands `gate.sh` runs are documented below for reference — you do not paste
+them:
 
 ```bash
 # Refresh BASE_BRANCH at most once an hour. cca clones $PWD, so a stale local
 # dev is silently inherited by every agent spawned from it.
-stamp=~/.claude/orchestrate-linear/last-fetch
+stamp=~/.claude/linear-orchestrator/last-fetch
 if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -f %m "$stamp") )) -gt 3600 ]; then
   if [ -z "$(git -C <REPO> status --porcelain)" ] \
      && [ "$(git -C <REPO> branch --show-current)" = "<BASE_BRANCH>" ]; then
@@ -326,7 +353,7 @@ on it, and was not satisfied. That is the highest-value signal this loop ever
 receives — it is the only point where a human tells it that its own judgment was
 wrong. For each one, in this order:
 
-1. Find the ticket. The branch name carries the id (`feature/hyr2-431-…`), and
+1. Find the ticket. The branch name carries the id (`feature/<prefix>-431-…`), and
    the PR body links it.
 2. **Move the ticket back to `READY_STATUS`** in `TRACKER`. That is what lets it
    be picked up again — the loop reads columns, not PRs.
@@ -416,9 +443,9 @@ human-hold state, and never leave such a PR drafted "until someone looks at it".
 
 Drafting it achieves the opposite of the intent: the person who must act is the
 one person the draft hides it from. One run kept a PR drafted for hours on
-exactly this mistake — every gate green, waiting on one manual test the user had
-asked for — while the user read the ready list and never saw it. The PR
-template's **Needs human verification** section carries the same fact for
+exactly this mistake — every gate green, waiting on one manual alias test the
+user had asked for — while the user read the ready list and never saw it. The
+PR template's **Needs human verification** section carries the same fact for
 whoever reads the diff.
 
 `WORK_CACHE` holds the drafts that are missing one of those, what each is
@@ -495,7 +522,7 @@ needs.
 {
   "builtAt": "2026-08-13T02:14:07Z",
   "tickets": [
-    { "id": "HYR2-431", "branch": "jan/hyr2-431-fix-invite-expiry" }
+    { "id": "XXX-431", "branch": "feature/xxx-431-fix-something" }
   ]
 }
 ```
@@ -542,7 +569,7 @@ as the top candidate, and only a `get_issue` before claiming caught it. Pass the
 flag, and treat a non-null `archivedAt` as a drop.
 
 Note also that `state:` matches the status **type**, not the column name. Asking
-for `Backlog` can return every backlog-type status — on one workspace that meant
+for `Backlog` returns every backlog-type status — on this workspace that means
 `Planned`, `Ideas` and `To Discuss` as well. Filter to the exact column name you
 meant, or the backlog pass quietly takes work from columns nobody triaged.
 
@@ -668,16 +695,23 @@ morning.
 on one, and never describe what it produced — the next tick, or the morning,
 finds out by reading the PR.
 
-### Run every tick in its own session
+### Keep the tick cheap — the loop runs in the user's session
 
-The loop's real cost is the transcript, not the tick: twelve ticks an hour in one
-session, each re-sending everything before it. Compaction cannot fix that —
-`/compact` is a built-in CLI command, the Skill tool refuses it, and nobody is
-awake to type it. So do not grow a transcript at all. Each tick is its own
-`claude -p` process that starts empty and exits, so the twelfth hour costs what
-the first did. This works only because the tick keeps nothing in its head: the
-claim is the ticket status, the work is in the two caches, the agents are the
-lock files.
+The loop runs in the foreground so the user can watch it, which means every tick
+adds to one transcript. The tick has to stay small, or the twelfth hour costs
+far more than the first:
+
+- **One or two lines of output per tick.** Step 1 ends most ticks, and it ends
+  them in a single line. Never write a paragraph about a tick that did nothing.
+- **Project `gh` output with `--jq`** instead of pulling whole PR payloads into
+  context.
+- **Read no ticket descriptions on a spawning tick** — that is what `QUEUE_CACHE`
+  is for.
+
+A tick also keeps nothing in its head, which is what makes the loop safe to
+interrupt: the claim is the ticket status, the work is in the two caches, the
+agents are the lock files. So compaction, a `/clear`, or a stopped and restarted
+loop loses nothing — the next tick reads the same state off disk and the tracker.
 
 ---
 
@@ -893,9 +927,9 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
 
 ## Mode: stop
 
-1. End the repeat: `pkill -f 'orchestrate-linear tick'` kills the detached shell
-   and any tick mid-flight. If the loop is running inside a session instead,
-   tell that session to stop looping.
+1. End the repeat: stop the `/loop` in the session that runs it. From inside that
+   session, stop the loop rather than scheduling another tick. The user can also
+   interrupt it with escape, or just say "stop the orchestrator".
 2. Delete `QUEUE_CACHE` and `WORK_CACHE`. Both are caches of a moment that has
    passed, and leaving them means the next run's first tick spawns against a
    stale picture.
@@ -1007,8 +1041,11 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
   meanwhile branches from whatever commit `REPO` is parked on. Clean the working
   copy — the loop will not do it for you, on purpose.
 - **The session costs a fortune though every tick prints one line.** The bill is
-  the transcript, not the tick — run the loop as one `claude -p` per tick, and
-  project `gh` output with `--jq` instead of pulling whole PR payloads in.
+  the transcript, not the tick: the loop runs in one session, so each tick
+  re-sends everything before it. Cut what each tick *reads*, not what it prints —
+  project `gh` output with `--jq`, read no ticket descriptions unless the queue
+  is being rebuilt, and let step 1 end the tick in one line. A ticket cache that
+  keeps expiring early is the usual cause.
 - **A PR that merges clean but reverts something.** Its branch point predates
   the change it undoes. Check when `REPO` last fast-forwarded against when the
   branch was cut; an agent cannot see this from inside its own clone.

@@ -15,20 +15,20 @@
 # --- config: put your values in .env next to this file (gitignored; see .env.example) ---
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "$SELF/.env" ] && set -a && . "$SELF/.env" && set +a
-REPO="${OL_REPO:-/path/to/your/repo}"
-BASE="${OL_BASE:-dev}"
-TEAM="${OL_TEAM:-Your Team}"        # Linear team name
-PREFIX="${OL_PREFIX:-XXX}"          # ticket id prefix, e.g. HYR2
-TIER1="${OL_TIER1:-}"               # preferred assignee DISPLAY name (unassigned always eligible)
-TIER2="${OL_TIER2:-}"               # fallback assignee display name
-RAM_PER_AGENT="${OL_RAM_PER_AGENT:-2.5}"
+REPO="${LO_REPO:-/path/to/your/repo}"
+BASE="${LO_BASE:-dev}"
+TEAM="${LO_TEAM:-Your Team}"        # Linear team name
+PREFIX="${LO_PREFIX:-XXX}"          # ticket id prefix, e.g. HYR2
+TIER1="${LO_TIER1:-}"               # preferred assignee DISPLAY name (unassigned always eligible)
+TIER2="${LO_TIER2:-}"               # fallback assignee display name
+RAM_PER_AGENT="${LO_RAM_PER_AGENT:-2.5}"
 
-STATE=~/.claude/orchestrate-linear/gate-state
-QUEUE=~/.claude/orchestrate-linear/${PREFIX}-queue.json
+STATE=~/.claude/linear-orchestrator/gate-state
+QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
 # --- hourly base-branch refresh (refuses, never forces) ---
-stamp=~/.claude/orchestrate-linear/last-fetch
+stamp=~/.claude/linear-orchestrator/last-fetch
 notes=""
 if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -f %m "$stamp") )) -gt 3600 ]; then
   if [ -z "$(git -C $REPO status --porcelain)" ] \
