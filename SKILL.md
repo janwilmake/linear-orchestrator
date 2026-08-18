@@ -22,39 +22,33 @@ morning job is to read the PRs, not to fix a broken base branch.
 
 ## Project settings
 
-The values that change per user live in **`.env`** beside this skill — copy
-`.env.example`, fill it in, and it stays out of the repo (gitignored). `gate.sh`
-sources it, and a tick reads it too. The rows below marked *(.env)* come from
-there; the rest are fixed. So pointing the skill at another repo is editing
-`.env`, nothing in this file.
+Per-user values live in **`.env`** beside this skill — copy `.env.example`, fill
+it in, done. It is gitignored, so nothing personal reaches the repo; `gate.sh`
+and every tick read it:
 
-| Setting             | Value                                                                                   |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| `REPO`              | *(.env `LO_REPO`)* — local checkout the agents clone from                               |
-| `AGENT_GUIDE`       | your repo's agent guide (e.g. `CLAUDE.md`) — what needs confirmation, the status rule    |
-| `TRACKER`           | Linear MCP                                                                              |
-| `TRACKER_TEAM`      | *(.env `LO_TEAM`)* — Linear team name                                                   |
-| `TICKET_PREFIX`     | *(.env `LO_PREFIX`)* — e.g. `PROJ`                                                      |
-| `READY_STATUS`      | `Todo`, then `Backlog` once no `Todo` ticket is eligible                                 |
-| `CLAIMED_STATUS`    | `In Progress`                                                                           |
-| `ASSIGNEE_TIER_1`   | *(.env `LO_TIER1`)* — preferred assignee display name, or unassigned                    |
-| `ASSIGNEE_TIER_2`   | *(.env `LO_TIER2`)* — fallback assignee display name                                    |
-| `BASE_BRANCH`       | *(.env `LO_BASE`)* — default `dev`                                                      |
-| `FORGE`             | GitHub, via `gh`                                                                        |
-| `DEV_SERVER`        | Vite — free port in 5200–5299, with `VITE_BASE_URL` pointed at it                       |
-| `RAM_PER_AGENT_GB`  | *(.env `LO_RAM_PER_AGENT`)* — default `2.5` (one `claude` + Vite + Chrome). 8 GB caps `MAX_AGENTS` at 3 |
-| `PROD_SURFACES`     | Railway prod variables and service config, prod data, third-party dashboards on prod    |
-| `REVIEW_COMMAND`    | `/review <PR#>`                                                                         |
-| `INVALID_LABEL`     | `invalid` — the user puts this on a PR whose AI review-and-fix pass did not satisfy them |
-| `QUEUE_CACHE`       | `~/.claude/linear-orchestrator/<PREFIX>-queue.json` — one file per `TICKET_PREFIX`        |
-| `WORK_CACHE`        | `~/.claude/linear-orchestrator/<PREFIX>-work.json` — leftover work on already-open draft PRs |
+| `.env`                | called              | is                                         |
+| --------------------- | ------------------- | ------------------------------------------ |
+| `LO_REPO`             | `REPO`              | local checkout the agents clone from       |
+| `LO_BASE`             | `BASE_BRANCH`       | branch to cut from and target (`dev`)      |
+| `LO_TEAM`             | `TRACKER_TEAM`      | Linear team name                           |
+| `LO_PREFIX`           | `TICKET_PREFIX`     | ticket id prefix, e.g. `PROJ`              |
+| `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee (unassigned always eligible) |
+| `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
 
-**Before porting this to another repo, check the precondition:** that repo must
-have its own agent guide. The prompt in this skill is four short paragraphs
-*because* `AGENT_GUIDE` supplies branching, local checks, the PR template, e2e
-testing and the security rules. Point it at a repo with no such file and you
-get an unattended Opus agent running with `--dangerously-skip-permissions` and
-almost no instructions. Write the guide first.
+Fixed, no config: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE`
+your repo's guide (`CLAUDE.md`) · `READY_STATUS` `Todo` then `Backlog` ·
+`CLAIMED_STATUS` `In Progress` · `INVALID_LABEL` `invalid` · `REVIEW_COMMAND`
+`/review <PR#>` · `DEV_SERVER` Vite on a free port 5200–5299 · `PROD_SURFACES`
+never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
+`WORK_CACHE` `~/.claude/linear-orchestrator/<PREFIX>-{queue,work}.json` ·
+`MAX_AGENTS` = `min(4, floor(ram / RAM_PER_AGENT_GB))`.
+
+**Precondition: your repo must have its own agent guide.** The prompt this skill
+hands each agent is eight short paragraphs *because* `AGENT_GUIDE` supplies the
+rest — branching, local checks, the PR template, e2e testing, security. Point it
+at a repo with no such file and you get an unattended Opus agent on
+`--dangerously-skip-permissions` with almost no instructions. Write the guide
+first.
 
 `RAM_PER_AGENT_GB` is calibrated for a Vite server plus Chrome. A stack that
 runs Docker or a local database needs a bigger number — the capacity gate
@@ -118,11 +112,9 @@ Five steps. Stop at the first one that says stop, and report why.
 
 ### Step 1 — how many agents does the machine have room for?
 
-**This is the first thing every tick does, before the tracker, before the queue,
-before anything else.** Most ticks end here, and a tick that ends here must cost
-one `bash` call and one line of output — that is what makes a 5-minute loop
-cheap enough to run all night. The reaper below shares that one call, and adds
-a line only on the ticks where it actually killed something.
+**This is the first thing every tick does, before the tracker, before the
+queue.** Most ticks end here, in one `bash` call and one line — that is what
+makes a 5-minute loop cheap to run all night.
 
 **Run the gate, do not inline it.** The one `bash` call this step needs is
 `bash "<this skill's directory>/gate.sh"`, **outside the Bash sandbox**
@@ -153,170 +145,10 @@ open PRs. `gate.sh` reads its settings from `.env` (see the settings table);
 `agent-codemode` must be on `PATH` or at `~/.local/node/bin/agent-codemode`, or
 the gate skips Linear and says so in `notes`.
 
-The commands `gate.sh` runs are documented below for reference — you do not paste
-them:
-
-```bash
-# Refresh BASE_BRANCH at most once an hour. cca clones $PWD, so a stale local
-# dev is silently inherited by every agent spawned from it.
-stamp=~/.claude/linear-orchestrator/last-fetch
-if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -f %m "$stamp") )) -gt 3600 ]; then
-  if [ -z "$(git -C <REPO> status --porcelain)" ] \
-     && [ "$(git -C <REPO> branch --show-current)" = "<BASE_BRANCH>" ]; then
-    before=$(git -C <REPO> rev-parse --short HEAD)
-    git -C <REPO> pull --ff-only --quiet origin <BASE_BRANCH> 2>/dev/null \
-      && after=$(git -C <REPO> rev-parse --short HEAD) \
-      && [ "$before" != "$after" ] && echo "dev $before -> $after"
-    touch "$stamp"
-  else
-    echo "dev NOT refreshed: repo is dirty or not on <BASE_BRANCH>"
-  fi
-fi
-
-# Reap first: a slot with no live lock must own no processes.
-for n in 1 2 3 4 5 6 7 8; do
-  p=$(cat ~/.claude/agents/agent-$n.lock 2>/dev/null)
-  if [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; then
-    pids=$(pgrep -f "/.claude/agents/agent-$n/" 2>/dev/null)
-    [ -n "$pids" ] && { echo "reaped agent-$n: $(echo $pids | tr '\n' ' ')"; kill $pids 2>/dev/null; }
-  fi
-done
-sleep 2
-cores=$(sysctl -n hw.ncpu)
-ramgb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
-load=$(sysctl -n vm.loadavg | awk '{print $2}')
-freegb=$(vm_stat | awk '/page size of/{ps=$8} /Pages free/{f=$3}
-  /Pages speculative/{s=$3} /Pages purgeable/{p=$3} /Pages inactive/{i=$3}
-  END{gsub("\\.","",f); gsub("\\.","",s); gsub("\\.","",p); gsub("\\.","",i)
-      printf "%.1f", (f+s+p+i)*ps/1073741824}')
-diskgb=$(df -g / | tail -1 | awk '{print $4}')
-busy=0
-for n in 1 2 3 4 5 6 7 8; do
-  p=$(cat ~/.claude/agents/agent-$n.lock 2>/dev/null)
-  [ -n "$p" ] && kill -0 "$p" 2>/dev/null && busy=$((busy+1))
-done
-echo "cores=$cores ramgb=$ramgb load1=$load freegb=$freegb diskgb=$diskgb busy=$busy"
-
-# Which of the loop's own promoted PRs can no longer merge, or are red. One
-# call, and it decides nothing — 2b acts on it. Runs even when slots is 0,
-# because re-drafting needs no agent.
-gh pr list --state open --base <BASE_BRANCH> --limit 60 \
-  --json number,isDraft,mergeable,body,statusCheckRollup --jq '
-  [ .[]
-    | select(.isDraft == false)
-    | select((.body // "") | test("🌙"))
-    | { pr: .number,
-        merge: .mergeable,
-        ci: ( [ .statusCheckRollup[]?
-                | select(.conclusion != null and .conclusion != "SKIPPED" and .conclusion != "NEUTRAL") ] as $c
-              | if   ([ $c[] | select((.name // "") | startswith("Test (shard")) ] | length) == 0 then "not-run"
-                elif ([ $c[] | select(.conclusion != "SUCCESS") ] | length)      > 0 then "failing"
-                else "green" end ) }
-    | select(.merge == "CONFLICTING" or .ci == "failing") ]
-  | if length > 0 then "REGATE: \(.)" else empty end'
-```
-
-**Why the fetch is here and not in the agent prompt.** `cca` clones `$PWD` at
-spawn time, so whatever commit `REPO` is sitting on becomes the base of the
-agent's branch. A `REPO` left on last night's `dev` therefore produces PRs that
-branch from stale code — they merge cleanly, pass their own tests, and quietly
-revert or conflict with whatever landed in between. The agent cannot detect
-this: from inside its copy, its `dev` looks like `dev`. The only place to fix it
-is before the clone.
-
-**Hourly, not every tick.** A fetch costs a network round trip and the base
-branch does not move every five minutes; twelve an hour is eleven wasted. The
-stamp file is what keeps it hourly, and `--ff-only` is what keeps it safe — if
-someone has committed locally on `dev`, the pull fails rather than merging, and
-the tick carries on with the old base.
-
-**It refuses rather than forces.** A dirty `REPO`, or one parked on another
-branch, means somebody is working in it, and a checkout or stash under their
-hands is far worse than an hour-old base. It says so in one line and moves on;
-that line is the cue to sort the working copy out by hand.
-
-**Reap before measuring, or the gate reads a lie.** `--non-interactive` ends
-the `claude` session, but `DEV_SERVER` was started as a detached `npm exec`
-child and outlives it. Every completed agent therefore leaks its dev server —
-measured at 150–200 MB each on this stack — and the leak is invisible to the
-lock files, so `busy` reads the slot as free while the memory is still gone.
-Six agents into a night that is a gigabyte of `freegb` the gate never sees,
-which is the difference between spawning three agents at once and spawning one
-per tick for hours.
-
-The match is on the agent's own directory path, so it can only ever kill
-processes belonging to that slot, and it only runs against a slot whose lock is
-missing or dead. Note the second failure it catches: `cca` re-clones over
-`agent-N`, so a leaked server keeps serving the *previous* occupant's checkout
-on its port. An agent that opens that port is testing another ticket's code and
-has no way to tell.
-
-Read free memory from `vm_stat`, not from `memory_pressure`. The
-`free percentage` that `memory_pressure` prints counts pages the kernel has
-already compressed, so it overstates the headroom — it reads 53% on this
-machine at moments when `vm_stat` shows 1.3 GB actually available. A gate on a
-number that cannot be spent is not a gate.
-
-**The slot count is free memory divided by the cost of an agent:**
-
-```
-slots = max( 0, min( MAX_AGENTS - busy, floor(freegb / RAM_PER_AGENT_GB) ) )
-MAX_AGENTS = min(4, floor(ramgb / RAM_PER_AGENT_GB))
-```
-
-Both quotients floor, and `slots` clamps at 0. `RAM_PER_AGENT_GB` need not divide
-`ramgb` evenly — 8 GB at 2.5 each is `floor(3.2)` = 3, not 3.2 — and `busy` can
-exceed `MAX_AGENTS` after the setting is lowered mid-run, which would otherwise
-make `slots` negative.
-
-One agent per `RAM_PER_AGENT_GB` of *freeable* memory — 6 GB free at 2 GB each
-is 3 agents, and this tick may spawn all three at once. `freegb` already counts
-the memory of every agent currently running, so the quotient is how many *more*
-fit; no settle delay or re-probe between spawns is needed, and the next tick
-re-measures 5 minutes later anyway.
-
-This is why the rule is a quotient and not a boolean. A gate that only asked
-"is there room for one?" answered yes at 6 GB free and at 2.1 GB free alike, so
-the loop added one agent per tick and took three ticks to reach a concurrency
-the machine could have held from the start.
-
-`MAX_AGENTS` is the ceiling on top of that: past 4 the machine thrashes no
-matter what `vm_stat` claims, and `busy` is read from 8 lock files, so 8 is a
-hard wall regardless.
-
-Two conditions gate the whole tick — if either fails, `slots = 0`:
-
-- `load1 <= cores * 0.7`
-- `diskgb >= 10` — each clone costs about 100 MB, but a full disk corrupts
-  every agent at once, not just the new one. This machine normally sits near
-  19 GB free, so a stricter number would block every tick.
-
-**If `slots` is 0, end the tick right here** — except for the `REGATE` line.
-One line: the numbers, and which one was zero or blocking. Do not read the
-tracker, do not touch `QUEUE_CACHE`, do not explain. A skipped tick is the normal
-case and the next one is 5 minutes away.
-
-**A `REGATE` line is acted on even at `slots = 0`,** because taking a PR out of
-draft needs no agent — only fixing it does. Do the re-draft half of 2b, then end
-the tick. A promoted PR that cannot merge is worse than one nobody has reviewed:
-it sits in the human's ready list looking finished.
-
-**Two traps in that one call, both learned the hard way.**
-
-`mergeable` is computed **lazily** by GitHub, so the first read of a PR often
-returns `UNKNOWN` — early in one run every PR in the list read `UNKNOWN`, and
-minutes later the same query returned real values. So: `UNKNOWN` is never a
-conflict, and it is never a pass either. It means *not known yet*, so the PR is
-not promotable this tick and the next tick asks again. Treating `UNKNOWN` as
-clean promotes PRs that cannot merge; treating it as dirty re-drafts the whole
-board.
-
-`statusCheckRollup` is scoped to the **head commit**, which is what you want, but
-a rollup that is merely non-empty proves nothing. This repo's `blacksmith.sh`
-integration posts `[code]smith` and skips it, so a PR whose CI never ran still
-shows one check. That is why the test requires a `Test (shard …)` check to be
-present and green: the shards only exist if the CI workflow actually executed.
-Counting checks, or trusting "no failures", both read a never-run PR as passing.
+When `slots` is 0 the tick still acts on a `REGATE` line — re-drafting a PR that
+can no longer merge needs no agent (the re-draft half of 2b) — then ends. Everything `gate.sh` measures and why —
+the memory math, the reaper, the `mergeable`/CI classification, the traps around
+`UNKNOWN` and never-run CI — lives in its comments; do not reproduce it here.
 
 ### Step 2 — pick the next `slots` pieces of work
 
@@ -860,47 +692,22 @@ the prompt: **never `git add` an image, and the diff must not grow by a single
 file.** The one legitimate exception is a ticket whose subject genuinely is an
 image asset, and that is a ticket, not a screenshot task.
 
-### Why the review is one comment and not an inline review
+### Why one comment, and one fix pass
 
-`/review` will happily post as a GitHub *review* with comments pinned to lines
-in the diff. Do not let it. Three reasons, in the order they bite:
+Both rules keep the morning readable.
 
-- **A pending review can leave the PR blocked.** A review left in a non-approved
-  state sits on the PR as an unresolved verdict from an account that is not
-  coming back to resolve it, and on a protected branch that can hold up a merge
-  a human has already approved.
-- **Inline comments vanish on the next push.** The fix pass rewrites the very
-  lines the review is attached to, so GitHub marks them outdated and folds them
-  away. The record of what was wrong disappears exactly when someone wants to
-  check whether it was fixed.
-- **It is unreadable as evidence.** The morning job is to read one comment and
-  decide whether the PR was checked. Fifteen collapsed line notes scattered
-  through a diff is not that, and it is why a run can look reviewed while its
-  `comments` count is zero.
-
-One comment, top to bottom, with file and line references written as text.
-
-### Why the fix pass runs after the comment, and only once
-
-**The review comment is the morning's best signal** — the agent naming the
-faults in its own work. Move the fix pass ahead of it and that record never
-exists: the reader gets a clean-looking PR and no evidence that anything was
-checked. So the order is post, then fix, then say what you fixed. The reply
-comment keeps the trail readable end to end.
-
-**One pass, because self-review does not converge.** An agent that reviews its
-own fixes finds a fresh set of blockers every round, each one thinner than the
-last, and the loop runs until the night ends. One pass also bounds the cost: the
-agent holds its slot until the window closes, and at a real `MAX_AGENTS` of 2 on
-this machine, every extra minute is a ticket the night does not reach.
-
-**Fixing does not earn a merge.** The author and the reviewer are one model here,
-so "no blockers left" carries no independent weight. One bad merge into
-`BASE_BRANCH` at 02:00 also lands under every agent that spawns after it, which
-turns one broken PR into a morning of bisecting. To make merges defensible, the
-review has to come from an agent that did not write the code — a second `cca`
-agent on the open PR, on a later tick. That is a different design; this file does
-not do it.
+- **One PR comment, not a GitHub review.** An inline review can leave the PR
+  blocked by an unresolved verdict from an account that never returns; its line
+  notes vanish when the fix pass rewrites those lines; and scattered notes are
+  unreadable as evidence. One comment, top to bottom, file/line refs as text.
+- **The comment before the fix.** The review comment is the morning's best
+  signal — the agent naming faults in its own work. Fix first and that record
+  never exists. Order: post, then fix, then reply what you fixed.
+- **One fix pass.** Self-review does not converge — each round finds thinner
+  blockers until the night ends — and the agent holds its slot the whole time.
+- **Fixing does not earn a merge.** Author and reviewer are one model, so "no
+  blockers left" carries no weight; a defensible merge needs a second,
+  independent agent, which this file does not do.
 
 ---
 
@@ -943,113 +750,7 @@ Do not rebuild either — `status` spawns nothing and spends nothing.
 
 ## What goes wrong
 
-- **A retry loop that reports success without doing the work.** Never write
-  `gh ... | tail -1 && break`, or any retry whose condition is a *pipeline's*
-  exit status: the shell reports the status of the **last** command in the pipe,
-  so `tail` returning 0 hides a `gh` that just 503'd, the loop breaks, and the
-  write silently never happened. This skipped a PR's re-draft on one run and the
-  tick reported it as done. Make every retry **verify the state** instead —
-  re-read `gh pr view <PR#> --json isDraft`, or the labels, or whatever the write
-  was supposed to change — and break on the state being right, never on a command
-  appearing to succeed. The same rule covers `gh` generally: it 502s and 503s
-  often enough that a single unchecked call is a coin toss.
-- **A tick spawns nothing for hours.** Usually correct — the queue is empty of
-  eligible tickets, or `MAX_AGENTS` are already busy. Check `status` before
-  assuming it broke.
-- **`slots` is 0 every tick, and no agent ever starts.** Measured on an 8 GB
-  machine **with two agents already running** — the state that decides whether a
-  third may start — `freegb` sat between 1.3 and 2.5 GB across ten samples,
-  three of them under 2 GB. `floor(freegb / 2)` is 0 or 1 there, so the third
-  slot is a coin toss and the cap of 4 is never reached. That is the rule
-  working, not failing. To get real concurrency, add RAM — dividing by a
-  smaller number does not create memory that is not there, it only lets the
-  machine swap. **But check the reaper's output first:** those samples were
-  taken before step 1 reaped leaked dev servers, and some of that missing
-  memory was servers nobody was using. A tick that prints several `reaped`
-  lines was measuring a machine fuller than it really was.
-- **A dev server answering on a port no live agent claims.** A leak the reaper
-  missed, most likely because the process no longer matches its slot's
-  directory path. `lsof -nP -iTCP:5200-5299 -sTCP:LISTEN` names the owners;
-  anything whose parent `claude` is gone is dead weight, and worse, it is
-  serving a checkout `cca` has since replaced.
-- **A ticket in `QUEUE_CACHE` that a human already took.** Expected: the queue
-  is up to 30 minutes stale by design. Step 3's `get_issue` check catches it and
-  moves on to the next entry. If tickets are being reassigned faster than that,
-  shorten the 30 minutes rather than removing the check.
-- **Two agents on one ticket.** The queue entry was not removed before spawning,
-  or a rebuild ran between the claim and the spawn. Both are step 3 failing, not
-  the cache: the tracker status is the claim, and it must move before `cca` is
-  called.
-- **An agent still runs long after its PR opened.** The fix pass turned into a
-  review loop. Read the PR: more than one fix commit, or a second review comment,
-  means the one-pass rule did not hold. Close the window once the work is pushed,
-  and the ticket keeps its PR.
-- **All 8 slots busy.** Agents keep their slot when they leave uncommitted work
-  or unpushed commits. Read `git -C ~/.claude/agents/agent-N status` before
-  closing a window — that is the run's output sitting there.
-- **A ticket stuck in `CLAIMED_STATUS` with no PR.** The status moved but the
-  agent never got there — a failed spawn, or a window someone closed. Nothing
-  recovers it automatically. Move it back to `READY_STATUS` and the next tick
-  takes it. Pairing claimed tickets against open PRs is how `status` finds
-  these.
-- **The machine swaps right after a tick spawned two or three at once.**
-  `RAM_PER_AGENT_GB` is too low for this stack — a Docker or database service
-  costs far more than a Vite server. Raise it in the settings table; the probe
-  cannot see it. Batch spawning makes this fail louder than it used to: the old
-  one-per-tick pace hid an underestimate behind 15 minutes of settling, and
-  dividing by the wrong number now buys three agents' worth of the mistake in
-  one go.
-- **The same PR is reclaimed every tick.** The `INVALID_LABEL` was not removed
-  in 2a. All four writes have to happen — ticket back to `READY_STATUS`, PR back
-  to draft, label off, comment posted — and the label is the one that makes the
-  work stop repeating.
-- **A PR sits in `WORK_CACHE` forever, dispatched every few ticks and never
-  finishing.** Something about it defeats the agent — a screenshot of a screen
-  that needs a live integration, a review that keeps dying. Read the PR after the
-  third attempt rather than spending a fourth. `WORK_CACHE` should record an
-  attempt count for exactly this.
-- **Drafts pile up and no ticket is ever started.** Working as designed: 2c
-  outranks 2d, so a backlog of unfinished drafts stops new work until it clears.
-  If that is the wrong call for a particular night, drain `WORK_CACHE` by hand
-  rather than reordering the steps — the ordering is what keeps the PR list
-  readable.
-- **A screenshot committed as a file.** The PR's diff grows by a `.png` and the
-  body links `raw.githubusercontent.com`. The agent took the shortcut of
-  `git add` instead of uploading through the GitHub UI, and a detector that
-  accepts `githubusercontent` calls that a pass. Check with
-  `git diff --name-only --diff-filter=A origin/<BASE_BRANCH>...<branch> | grep -Ei '\.(png|jpe?g|gif|webp)$'`
-  across the run's branches; a screenshot task must add **no** files.
-- **The user re-drafts a PR the loop promoted.** The promotion test believed
-  something it should not have. Read what the test matched on before changing
-  anything — the first time this happened it was CI badge `<img>` tags counted
-  as screenshots, and the fix was to require a GitHub-hosted non-`.svg` image.
-  Then re-run the corrected test over **every** currently-promoted PR, not just
-  the one the user caught: a bad test promotes in batches, and the user only
-  sees the one they opened.
-- **A PR shows no CI on the commit you care about, and older green runs above
-  it.** It conflicts. GitHub runs `pull_request` workflows against a merge commit
-  of the branch into the base and cannot build one while the branch conflicts, so
-  the workflow never starts — the PR keeps whatever checks its earlier,
-  still-mergeable commits earned. Read the head commit's rollup, not the branch's
-  run history: `gh pr view <PR#> --json statusCheckRollup`. 2b now catches this,
-  but the failure is silent and looks exactly like "CI is a bit slow".
-- **Every PR reads `mergeable: UNKNOWN`.** Not a bug and not a conflict. GitHub
-  computes mergeability on demand; query again in a few seconds. Never promote on
-  `UNKNOWN` and never re-draft on it.
-- **`dev NOT refreshed` on every tick.** Somebody left `REPO` dirty or on
-  another branch, so the hourly fetch keeps refusing. Every agent spawned
-  meanwhile branches from whatever commit `REPO` is parked on. Clean the working
-  copy — the loop will not do it for you, on purpose.
-- **The session costs a fortune though every tick prints one line.** The bill is
-  the transcript, not the tick: the loop runs in one session, so each tick
-  re-sends everything before it. Cut what each tick *reads*, not what it prints —
-  project `gh` output with `--jq`, read no ticket descriptions unless the queue
-  is being rebuilt, and let step 1 end the tick in one line. A ticket cache that
-  keeps expiring early is the usual cause.
-- **A PR that merges clean but reverts something.** Its branch point predates
-  the change it undoes. Check when `REPO` last fast-forwarded against when the
-  branch was cut; an agent cannot see this from inside its own clone.
-- **Chrome tabs pile up.** Tabs are scoped per MCP session, so no agent can
-  clear another's. After a night's run:
-  `osascript -e 'tell application "Google Chrome" to get URL of every tab of every window'`
-- **macOS only.** `cca` needs `open -a Terminal` and APFS `cp -Rc`.
+The failure modes seen on real runs — a tick that spawns nothing, `slots` stuck
+at 0, a promoted PR the user re-drafts, `mergeable: UNKNOWN`, a screenshot
+committed as a file, and the rest — are in
+[`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md). Read it when a run looks wrong.
