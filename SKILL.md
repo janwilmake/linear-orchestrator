@@ -35,6 +35,7 @@ and every tick read it:
 | `LO_PREFIX`           | `TICKET_PREFIX`     | ticket id prefix, e.g. `PROJ`              |
 | `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee (unassigned always eligible) |
 | `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
+| `LO_MAX_AGENTS`       | `MAX_AGENTS_CAP`    | hard ceiling on concurrent agents (default `4`) |
 | `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | the day the loop began marking its own comments; nothing older is read as feedback |
 
 Fixed, no config: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE`
@@ -43,7 +44,7 @@ your repo's guide (`CLAUDE.md`) · `READY_STATUS` `Todo` then `Backlog` ·
 `/review <PR#>` · `DEV_SERVER` Vite on a free port 5200–5299 · `PROD_SURFACES`
 never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
 `WORK_CACHE` `~/.claude/linear-orchestrator/<PREFIX>-{queue,work}.json` ·
-`MAX_AGENTS` = `min(4, floor(ram / RAM_PER_AGENT_GB))`.
+`MAX_AGENTS` = `min(MAX_AGENTS_CAP, floor(ram / RAM_PER_AGENT_GB))`.
 
 **Precondition: your repo must have its own agent guide.** The prompt this skill
 hands each agent is nine short paragraphs *because* `AGENT_GUIDE` supplies the

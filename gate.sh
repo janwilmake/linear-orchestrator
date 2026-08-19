@@ -29,6 +29,8 @@ PREFIX="${LO_PREFIX:-XXX}"          # ticket id prefix, e.g. HYR2
 TIER1="${LO_TIER1:-}"               # preferred assignee DISPLAY name (unassigned always eligible)
 TIER2="${LO_TIER2:-}"               # fallback assignee display name
 RAM_PER_AGENT="${LO_RAM_PER_AGENT:-2.5}"
+# Hard ceiling on concurrent agents, whatever the RAM math allows.
+MAX_AGENTS_CAP="${LO_MAX_AGENTS:-4}"
 WAIT_INTERVAL="${LO_WAIT_INTERVAL:-60}"   # --wait: seconds between probes
 WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re-arm
 # Comments written before the loop started marking its own carry no marker, so
@@ -128,7 +130,7 @@ probe() {
   done
   inhand=$(printf '%s' "$inhand" | jq -Rsc '[ split("\n")[] | select(length>0) | tonumber ]')
 
-  max_agents=$(awk -v r=$ramgb -v a=$RAM_PER_AGENT 'BEGIN{m=int(r/a); print (m>4?4:m)}')
+  max_agents=$(awk -v r=$ramgb -v a=$RAM_PER_AGENT -v c=$MAX_AGENTS_CAP 'BEGIN{m=int(r/a); print (m>c?c:m)}')
   slots=$(awk -v m=$max_agents -v b=$busy -v f=$freegb -v a=$RAM_PER_AGENT -v l=$load \
               -v c=$cores -v d=$diskgb 'BEGIN{
     if (l > c*0.7 || d < 10) { print 0; exit }

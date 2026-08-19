@@ -120,6 +120,7 @@ LO_PREFIX="ENG"                # ticket id prefix
 LO_TIER1="Preferred Assignee"  # display name; unassigned is always eligible
 LO_TIER2="Fallback Assignee"   # display name
 LO_RAM_PER_AGENT="2.5"         # GB per agent (claude + vite + chrome)
+LO_MAX_AGENTS="4"              # hard ceiling on concurrent agents
 LO_FEEDBACK_SINCE="2026-08-18T17:00:00Z"   # the day you installed this
 ```
 
