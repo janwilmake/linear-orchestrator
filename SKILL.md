@@ -47,7 +47,7 @@ never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
 `MAX_AGENTS` = `min(MAX_AGENTS_CAP, floor(ram / RAM_PER_AGENT_GB))`.
 
 **Precondition: your repo must have its own agent guide.** The prompt this skill
-hands each agent is nine short paragraphs *because* `AGENT_GUIDE` supplies the
+hands each agent is ten short paragraphs *because* `AGENT_GUIDE` supplies the
 rest — branching, local checks, the PR template, e2e testing, security. Point it
 at a repo with no such file and you get an unattended Opus agent on
 `--dangerously-skip-permissions` with almost no instructions. Write the guide
@@ -453,10 +453,11 @@ promote on the spot if it is there — before classifying anything else:
   outcome this must not reward. Do not test for `![` or `<img` alone: CI bots inject `<img>` SVG badges from third-party hosts, and a bare `<img>` reads as a screenshot. `.svg` is the tell: screenshots are PNG or JPEG,
   badges are SVG.
 
-  A `## Screenshots` heading is good practice and the agent prompts ask for it,
-  but do not make it the test — an author who pastes an image without the
-  heading has still done the thing, and the heading with nothing under it is a
-  lie the test would believe.
+  **Test the whole body, not a heading.** The agent prompts put the before shot in
+  Problem and the after shot in Solution rather than in a `## Screenshots` section,
+  so there is no heading to key on — and there never was a good one: a heading with
+  nothing under it is a lie the test would believe, and an author who pastes an
+  image without one has still done the thing.
 - **ready** — none of the above. Take it out of draft with `gh pr ready <PR#>`
   and drop it from the cache. This is the only place a PR becomes ready, and it
   happens on evidence, never on an agent's say-so.
@@ -735,8 +736,9 @@ true only here:
 > **Open the draft PR before you write any code** — right after you cut the
 > branch, with one empty commit if you need something to push. Its body is the
 > marker line, whatever heading lines your repo's template puts first, and then a
-> `# Problem` section: two or three sentences on what is actually wrong, in the
-> reader's terms, and the ticket link. Nothing else yet. A PR that exists from
+> `## Problem` section — collapsed, like every section — holding two or three
+> sentences on what is actually wrong, in the reader's terms, and the ticket link.
+> Nothing else yet. A PR that exists from
 > the first minute is how the orchestrator and a person can both see work in
 > flight, and writing the problem down before the solution is what keeps you
 > honest about which one you are solving.
@@ -755,11 +757,20 @@ true only here:
 > `<!-- 🌙 -->`.** The orchestrator reads unmarked comments as a human talking to
 > it, and an unmarked comment of yours would be answered as if a person wrote it.
 >
-> If the change is visible to a user, put before/after screenshots in the body
-> under `## Screenshots`. Drive the real screen in the browser to get them, and
-> **upload them through the GitHub web UI** — open the PR on github.com, edit
-> the body, drop the file into the editor so GitHub hosts it. Never `git add` an
-> image: a screenshot is evidence about the diff, not part of it.
+> **Every section of the body is collapsed**, `## Decisions` included. Each one is a
+> `<details>` whose `<summary>` is the section name, with a blank line under the
+> `<summary>` line or the markdown inside comes out raw. The one exception is a
+> `## Blocked on` notice, which never collapses. A person scrolling the PR should
+> see a list of section names and open the one they want, not a wall of prose.
+>
+> **Screenshots are not a section of their own.** If the change is visible to a
+> user, the before shot goes in **Problem** and the after shot in **Solution**, each
+> beside the sentence it is evidence for. A `## Screenshots` gallery at the bottom
+> separates every picture from the claim it proves, which is the opposite of what a
+> screenshot is for. Drive the real screen in the browser to get them, and **upload
+> them through the GitHub web UI** — open the PR on github.com, edit the body, drop
+> the file into the editor so GitHub hosts it. Never `git add` an image: a
+> screenshot is evidence about the diff, not part of it.
 >
 > Do not run `npm install` — `node_modules` is a symlink to the real checkout.
 > Other agents are running dev servers, so take a free port in 5200–5299 and
@@ -787,10 +798,11 @@ of this table. Pass `gitBranchName` verbatim from the tracker rather than
 inventing a branch name: it is what makes the tracker link the PR back to the
 ticket by itself.
 
-Keep all nine paragraphs. Each covers something no file in the copy says: the
+Keep all ten paragraphs. Each covers something no file in the copy says: the
 no-confirmation rule, Decisions, the PR opened first, the body kept current, the
-marker, the screenshot upload, the two `cca` footguns, the do-not-review rule,
-and the closing sequence. Everything else the
+marker, every section collapsed, where the screenshots go and how they are
+uploaded, the two `cca` footguns, the do-not-review rule, and the closing
+sequence. Everything else the
 agent already has.
 
 ### The four prompts for finishing a draft (2b and 2c)
@@ -842,7 +854,11 @@ it did not write.
 * **Fix the PR body too where the diff has moved past it** — this agent is the
   first reader the PR has had, so a body that no longer describes the code is its
   to correct. Keep the 🌙 marker line and the `## Decisions` section; correct what
-  is wrong rather than rewriting what is merely terse.
+  is wrong rather than rewriting what is merely terse. **Fix the shape as well as
+  the content**: every section collapsed in its own `<details>`, `## Decisions`
+  included, a blank line under each `<summary>`, and the screenshots moved out of
+  any `## Screenshots` section into Problem (before) and Solution (after). A
+  `## Blocked on` notice stays open.
 
 **needs-fix** — a review is already on the PR. Tell the agent where to read it
 (`gh pr view <PR#> --json comments`, or
@@ -873,7 +889,8 @@ fix the conflict first and let CI run for the first time afterwards.
 
 **needs-screenshot** — the narrowest one, and it must say so: check out the
 branch, start a dev server, drive the changed screen, capture before and after,
-edit them into the body under `## Screenshots`, **change no code**. An agent that
+edit the before shot into the body's **Problem** section and the after shot into
+**Solution** — never a `## Screenshots` section of their own — **change no code**. An agent that
 finds a bug while screenshotting should write it in a PR comment, not fix it —
 the diff has already been reviewed, and widening it now invalidates that review.
 
