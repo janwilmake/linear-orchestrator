@@ -300,6 +300,34 @@ ids. That numbering is the whole interface between a one-line review comment and
 the next night's work — so quote the item into the ticket rather than paraphrasing
 it, and never renumber the section.
 
+##### Never create a ticket that already exists
+
+**A comment is not always a person typing.** Other automated loops on this
+machine write to the same pull requests — the screenless loop relays what a
+caller decided on a call, and it opens the tickets for that call itself. Its
+comments carry no `🌙`, so the gate hands them over as human feedback, which is
+right: the caller *is* speaking. What is wrong is answering that comment by
+opening a ticket the other loop opened one minute earlier.
+
+So, before creating any ticket out of a comment:
+
+1. **Read the comment for ticket ids.** A relay names what it already created —
+   the screenless loop marks its comments `<!-- ☎️ -->` and lists them under
+   `Already ticketed:`. Ids in that list are done. Link them in the ack and
+   create nothing.
+2. **Then search the tracker anyway**
+   (`list_issues(team: TRACKER_TEAM, query: "<the subject>", includeArchived: false)`),
+   because a relay that forgot to say so, and a person who wrote the same thing
+   twice, look identical from here. An open ticket on the same question, created
+   in the last few days, is the ticket — ack with its id.
+3. Only then create one.
+
+Seen on a real run: the screenless loop opened HYR2-972 for a research question
+at 20:27 and commented the call's decisions on #789; the loop read that comment,
+and opened HYR2-973 for the same question at 20:28. Two tickets, one question,
+one minute apart. The rest of that answer — the PR back to draft, the rework
+dispatched — was right; only the ticket was duplicate work.
+
 ##### The `invalid` label — the explicit override
 
 The label still works, and it says something a comment does not: *redo this*. It
