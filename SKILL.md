@@ -48,7 +48,7 @@ never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
 `MAX_AGENTS` = `min(MAX_AGENTS_CAP, floor(ram / RAM_PER_AGENT_GB))`.
 
 **Precondition: your repo must have its own agent guide.** The prompt this skill
-hands each agent is ten short paragraphs *because* `AGENT_GUIDE` supplies the
+hands each agent is eleven short paragraphs *because* `AGENT_GUIDE` supplies the
 rest — branching, local checks, the PR template, e2e testing, security. Point it
 at a repo with no such file and you get an unattended Opus agent on
 `--dangerously-skip-permissions` with almost no instructions. Write the guide
@@ -759,10 +759,19 @@ true only here:
 > in the Post-merge runbook.
 >
 > Blockers do not stop you either. Decide what a careful colleague would defend
-> in the morning, prefer the cheapest option to reverse, and record every such
-> call in a `## Decisions` section in the PR body — the question, what you
-> chose, why, the alternative, and the cost to reverse. On a ticket with gaps,
-> an empty Decisions section is wrong. If a blocker is genuinely undecidable —
+> in the morning, prefer the cheapest option to reverse, and record the call in a
+> `## Decisions` section in the PR body — the question, what you chose, why, the
+> alternative, and the cost to reverse.
+>
+> **A Decision needs two or more clear options.** The test is whether a careful
+> colleague could have picked the other one: the ticket left a gap, and you closed
+> it. Following an instruction is not a decision, however deliberate it felt —
+> not from `AGENT_GUIDE`, not from the ticket, not from this prompt. "The branch
+> opened with an empty commit so the draft PR could exist before the code, as
+> instructed" is the shape to leave out: one option, no choice, and it spends the
+> attention the real decisions need. So an empty Decisions section is the honest
+> one on a ticket that specified everything, and the wrong one on a ticket with
+> gaps. If a blocker is genuinely undecidable —
 > a missing credential, an account nobody connected — ship what you have with
 > `## Blocked on` as the **first thing in the body**, above everything, and never
 > inside a `<details>`. The orchestrator takes that PR out of draft on its next
@@ -834,8 +843,8 @@ of this table. Pass `gitBranchName` verbatim from the tracker rather than
 inventing a branch name: it is what makes the tracker link the PR back to the
 ticket by itself.
 
-Keep all ten paragraphs. Each covers something no file in the copy says: the
-no-confirmation rule, Decisions, the PR opened first, the body kept current, the
+Keep all eleven paragraphs. Each covers something no file in the copy says: the
+no-confirmation rule, Decisions, what counts as one, the PR opened first, the body kept current, the
 marker, every section collapsed, where the screenshots go and how they are
 uploaded, the two `cca` footguns, the do-not-review rule, and the closing
 sequence. Everything else the
@@ -890,7 +899,10 @@ it did not write.
 * **Fix the PR body too where the diff has moved past it** — this agent is the
   first reader the PR has had, so a body that no longer describes the code is its
   to correct. Keep the 🌙 marker line and the `## Decisions` section; correct what
-  is wrong rather than rewriting what is merely terse. **Fix the shape as well as
+  is wrong rather than rewriting what is merely terse. **Delete the Decisions
+  entries that record no choice** — an entry that only restates an instruction,
+  with no second option a colleague could have picked, buries the ones a human
+  must read. **Fix the shape as well as
   the content**: every section collapsed in its own `<details>`, `## Decisions`
   included, a blank line under each `<summary>`, and the screenshots moved out of
   any `## Screenshots` section into Problem (before) and Solution (after). A
