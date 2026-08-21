@@ -271,9 +271,12 @@ list_issues(team, updatedAt: "> <watermark>", orderBy: updatedAt,
 - Issues moved → fetch `list_comments` for just those issues, in parallel
   (4 calls ≈ 1.5s, benchmarked). New human comment with no 🌙 thread-reply →
   `FEEDBACK` line. Status flips fold into the state hash.
-- The watermark is a **persisted timestamp file** advanced only on probes the
-  model saw (same rule as the state hash), so a waiter that was down catches up
-  on wake instead of looking at the last 60 seconds.
+- The watermark is a **persisted timestamp file**, and it may advance on any
+  successful probe — quiet ones included — because the **pending file, not the
+  watermark, is the ledger of what is owed**: an unanswered thread stays there
+  until a fetch shows it answered. On failure nothing advances. A missing
+  watermark re-initializes to the full feedback window, so a wiped state dir
+  re-scans instead of forgetting.
 - Budget guard: a probe is one `list_issues` always, plus comment fetches only
   for moved issues. Worst case stays under ~3s against a 60s interval;
   rate-limit exposure ~60–120 requests/hour.
@@ -441,3 +444,38 @@ branch. The ones that changed the design, not just the code:
   believed as a human takeover.
 - **Anchored markers**: 🌙 is matched at line start (`(?m)^🌙`, legacy
   `<!-- 🌙` accepted), so a human quoting a loop comment reads as a human.
+
+A second review pass (10 more findings, 8 confirmed) hardened the failure
+paths; all applied:
+
+- **Any per-ticket parse or fetch failure freezes state** — the empty-body jq
+  crash that silently defeated the freeze guard is fixed (guarded `first`,
+  exit codes checked), and a failed ticket is never pruned.
+- **Graceful Linear degradation**: a dead token no longer blinds the gate to
+  GitHub-readable work — the full REGATE/DRAFTS block still prints — and the
+  error wakes the model once, then damps for 15 minutes, instead of turning
+  `--wait` into a wake-per-minute storm.
+- **Full-page refusal**: >100 movers since the watermark (server returns
+  newest first, so any advance would skip the oldest forever) refuses to
+  advance and wakes the model to decide.
+- **Steering allowlist restored**: `LO_FEEDBACK_AUTHORS` (empty = everyone)
+  filters who steers; `MERGE_AUTHORS` is resolved by the gate and stamped
+  onto each entry as `may_merge`, so the tick has the verdict at runtime.
+- **Absolute feedback epoch**: `LO_FEEDBACK_SINCE` (set at cutover) joins the
+  rolling 14-day floor — pre-cutover chatter on re-statused tickets cannot
+  flood in as instructions on migration night.
+- **Durable awaiting-steer**: the human's drag-back rework order is recorded
+  as a literal `🌙 Awaiting steer` ticket comment; the WORK_CACHE rebuild
+  re-derives the state from it, so a cache rebuild or stop cannot re-promote
+  against a standing order.
+- **Full drift reconciliation**: the WORK_CACHE rebuild compares every loop
+  PR (draft and promoted) against its ticket status — the gate's DRIFT line
+  is only the movers fast path; GitHub-born drift is caught within 30 min.
+- **Authoritative-PR drift join**: with multiple loop PRs on one ticket
+  (superseded draft beside the live one), drift is judged against the newest
+  promoted PR, not every branch that mentions the id.
+- **Watermark semantics corrected** (§5): it may advance on quiet probes —
+  the pending file is the ledger; a lost state dir re-scans the feedback
+  window instead of forgetting.
+- **`skipped` shape pinned** in the queue schema (objects with `id` + `why`;
+  the gate accepts bare strings too).

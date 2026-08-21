@@ -45,7 +45,11 @@ ball is it.**
 
 The invariant: **`isDraft` ⇔ `READY_STATUS`, promoted ⇔ `HUMAN_STATUS`**, for
 every ticket the loop owns (the 🌙 in the PR body is the ownership test). The
-gate reports drift on every probe; the tick repairs it (2b).
+gate reports the drift it can see cheaply — tickets that moved in Linear since
+the last probe — and the `WORK_CACHE` rebuild reconciles **every** loop PR
+against its ticket every 30 minutes, which is what catches drift born on the
+GitHub side (a human running `gh pr ready`, a status write that failed). The
+tick acts on both (2b).
 
 Moving a ticket into `READY_STATUS` is the start signal. The loop claims work
 with local dispatch markers, not with the status — a ticket stays `Todo` for
@@ -75,8 +79,10 @@ and every tick read it:
 | `LO_READY_STATUS`     | `READY_STATUS`      | the machine's status (default `Todo`)      |
 | `LO_HUMAN_STATUS`     | `HUMAN_STATUS`      | the human's status (default `In Progress`) |
 | `LO_MERGED_STATUS`    | `MERGED_STATUS`     | the merged status (default `In review`)    |
-| `LO_MERGE_AUTHORS`    | `MERGE_AUTHORS`     | comma-separated Linear display names whose "merge" comment is executed; **defaults to `ASSIGNEE_TIER_1` alone** |
-| `LO_FEEDBACK_MAX_AGE_DAYS` | —              | human comments older than this never surface as feedback (default `14`) |
+| `LO_MERGE_AUTHORS`    | `MERGE_AUTHORS`     | comma-separated Linear display names whose "merge" comment is executed; **defaults to `ASSIGNEE_TIER_1` alone**. The gate resolves this and stamps each `FEEDBACK` entry with `may_merge` |
+| `LO_FEEDBACK_AUTHORS` | `FEEDBACK_AUTHORS`  | comma-separated Linear display names whose comments steer the loop; empty (default) means everyone who can comment |
+| `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | **set to the cutover moment**: comments older than it never surface, so pre-cutover triage history cannot read as instructions |
+| `LO_FEEDBACK_MAX_AGE_DAYS` | —              | rolling floor on top of that: human comments older than this many days never surface (default `14`) |
 | `LO_STATE_DIR`        | —                   | gate state dir override, for testing a gate without touching the live one |
 
 Fixed, no config: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE`
@@ -282,11 +288,14 @@ generates on its own.
 #### 2a — Act on what a person said
 
 The `FEEDBACK` line names comment threads on the loop's tickets that no 🌙
-reply has answered yet — each entry a ticket id, a thread id and the newest
-human comment in it. The gate's rule is ordering, not existence: **a thread is
-answered when its newest human comment is older than its newest 🌙 reply**, so
-a person replying into an already-acked thread wakes the loop again, which is
-exactly right.
+reply has answered yet — each entry a ticket id, a thread id, the newest human
+comment in it, `who` wrote it, and `may_merge`. The gate's rule is ordering,
+not existence: **a thread is answered when its newest human comment is older
+than its newest 🌙 reply**, so a person replying into an already-acked thread
+wakes the loop again, which is exactly right. The gate has already applied
+`FEEDBACK_AUTHORS` (when set, only those people steer — everyone else's
+comments never reach this line, and never get an ack; say so to the user if
+they ask why a comment went unanswered) and both feedback floors.
 
 Take the entries oldest first. Read the thread
 (`list_comments(issueId: <ticket>)`), then act:
@@ -296,11 +305,12 @@ word `merge`** and contains nothing beyond a short tail ("merge", "merge it",
 "merge pls") is a human ordering the merge. A comment that merely *mentions*
 merging mid-sentence is ordinary feedback, never a command. For a merge order:
 
-1. **The author must be in `MERGE_AUTHORS`** — the gate's `FEEDBACK` entry
-   carries `who`, and only the listed Linear display names may order a merge.
-   Anyone else's "merge" is ordinary feedback: reply 🌙 that merging is
-   reserved to the listed people and name them, and execute nothing. This is
-   the one place authorship gates an action — a comment can steer work at any
+1. **The entry must say `may_merge: true`.** The gate resolves
+   `MERGE_AUTHORS` and stamps the verdict onto every `FEEDBACK` entry — the
+   tick has no `.env` at the moment of the check, so the entry itself carries
+   it. A "merge" from anyone else is ordinary feedback: reply 🌙 that merging
+   is reserved to the listed people, and execute nothing. This is the one
+   place authorship gates an action — a comment can steer work at any listed
    author's word, but a merge lands on the base branch, and the old system
    could not merge at all.
 2. Re-check the state via `get_diff(<PR url>)` and the gate's block: the PR is
@@ -393,13 +403,19 @@ For each `DRIFT` entry:
 
 - **Promoted PR + ticket in `READY_STATUS`** — a human dragged it back. That
   is a rework order, the drag-and-drop successor to the old `invalid` label,
-  and it needs no words to count. Re-draft the PR (`gh pr ready --undo`),
-  reply 🌙 on the ticket — "read as: rework wanted; say in a comment what to
-  change, or drag it back to `HUMAN_STATUS` to undo" — and record the draft in
-  `WORK_CACHE` as `awaiting-steer`. **2c must not re-promote an
-  `awaiting-steer` draft** (its five gates still pass — that is how it got
-  promoted the first time); the state clears when a human comment arrives
-  (2a dispatches the rework) or the human drags the ticket forward again.
+  and it needs no words to count. Re-draft the PR (`gh pr ready --undo`) and
+  comment 🌙 on the ticket, **first line exactly `🌙 Awaiting steer`**, then:
+  read as rework wanted; say in a comment what to change, or drag it back to
+  `HUMAN_STATUS` to undo. Record the draft in `WORK_CACHE` as
+  `awaiting-steer`. **The comment, not the cache, is the durable record** —
+  the cache is rebuilt every 30 minutes and deleted on stop, and a rebuild
+  that consulted only the five gates would re-promote this draft against the
+  human's standing order (its gates still pass — that is how it got promoted
+  the first time). So the rebuild re-derives `awaiting-steer` from the
+  ticket: an `🌙 Awaiting steer` comment newer than both the newest human
+  comment and the newest commit means exactly that. The state clears when a
+  human comment arrives (2a dispatches the rework, and new commits follow) or
+  the human drags the ticket forward again.
 - **Draft PR + ticket in `HUMAN_STATUS`** — either an automation fired (fix
   the automation: draft-open and review-activity transitions must be
   No action), or a human pulled the ticket to themselves. Set it back to
@@ -467,11 +483,19 @@ never reads.
 `WORK_CACHE` holds the drafts that are missing one of those, what each is
 missing, and in what order to take them. Rebuild it on the same 30-minute
 staleness rule as `QUEUE_CACHE`. The code half of the evidence comes from one
-`gh` call (`gh pr list --state open --base <BASE_BRANCH> --draft --json
-number,title,headRefName,commits,files,body`); the conversation half from the
-ticket (`list_comments`, and `get_issue` for the description) — one pair of
-reads per draft, so keep the rebuild on its staleness rule rather than running
-it every tick.
+`gh` call (`gh pr list --state open --base <BASE_BRANCH> --json
+number,title,headRefName,isDraft,commits,files,body` — **all open loop PRs,
+not only drafts**); the conversation half from the ticket (`list_comments`,
+and `get_issue` for the description) — one pair of reads per PR, so keep the
+rebuild on its staleness rule rather than running it every tick.
+
+**The rebuild is also the full status reconciliation.** The gate's `DRIFT`
+line only sees tickets that moved in Linear; drift born on the GitHub side —
+a human ran `gh pr ready`, a status write failed — never bumps the ticket and
+is invisible to it. So while the tickets are open anyway, compare each loop
+PR's draft bit against its ticket status and act per 2b's direction rules.
+This is what makes "the two systems tell one story" true within 30 minutes of
+any split, whichever side it was born on.
 
 For each draft, decide what it still needs. **Check `## Blocked on` first**, and
 promote on the spot if it is there — before classifying anything else:
@@ -518,7 +542,10 @@ promote on the spot if it is there — before classifying anything else:
   Test the whole description, not a heading — the screenshots live beside the
   sentences they prove, in Problem and Solution, so there is no gallery heading
   to key on, and there never should be.
-- **awaiting-steer / human-held** — marked so by 2b. Not promotable, not
+- **awaiting-steer / human-held** — a `🌙 Awaiting steer` (or takeover) ticket
+  comment newer than both the newest human comment and the newest commit.
+  Re-derive it from the ticket on every rebuild — never trust the old cache
+  for it, and never classify such a draft `ready`. Not promotable, not
   workable; a human comment or drag clears it. Skip.
 - **ready** — none of the above. Take it out of draft with `gh pr ready <PR#>`,
   **move the ticket to `HUMAN_STATUS`**, **assign it to `ASSIGNEE_TIER_1`** —
@@ -547,9 +574,16 @@ spawn needs.
   "builtAt": "2026-08-13T02:14:07Z",
   "tickets": [
     { "id": "XXX-431", "branch": "feature/xxx-431-fix-something" }
+  ],
+  "skipped": [
+    { "id": "XXX-433", "why": "prod-only work, moved to In Progress" }
   ]
 }
 ```
+
+The `skipped` shape is a contract: `gate.sh` reads it to keep judged-unrunnable
+ids out of `TODO-CANDIDATES` (it accepts bare id strings too, but write the
+object form — the `why` is what the morning reads).
 
 `Read` the file and **rebuild it** (below) in exactly two cases: it is missing,
 or `builtAt` is more than 30 minutes old. A rebuild is the only way a ticket

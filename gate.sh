@@ -21,6 +21,12 @@
 # tickets that moved get their comments fetched (in parallel). A quiet probe
 # costs one subprocess (~0.8s); a busy one two or three seconds. GitHub
 # comments are not read at all, by design — steering lives on the ticket.
+#
+# Failure discipline, in one sentence: when anything on the Linear side fails,
+# NOTHING advances — no watermark, no pending prune — the GitHub half of the
+# block still prints in full, and the error wakes the model once and is then
+# damped, because an expired token at 01:00 must neither swallow a comment nor
+# burn a turn a minute until morning.
 
 # --- config: put your values in .env next to this file (gitignored; see .env.example) ---
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,16 +54,30 @@ READY_STATUS="${LO_READY_STATUS:-Todo}"
 HUMAN_STATUS="${LO_HUMAN_STATUS:-In Progress}"
 MERGED_STATUS="${LO_MERGED_STATUS:-In review}"
 DONE_STATUS="${LO_DONE_STATUS:-Done}"
-# Human comments older than this many days are never surfaced as feedback.
-# Pre-cutover tickets carry months of triage chatter with no 🌙 replies; the
-# floor keeps a ticket's whole history from reading as tonight's instructions.
+# Two floors keep history from reading as instructions. The rolling one drops
+# human comments older than N days; the absolute one (set it to the moment of
+# cutover) drops everything from before the loop answered on Linear at all —
+# a re-statused ticket's last-two-weeks of pre-cutover triage chatter carries
+# no 🌙 replies and would otherwise flood in as unanswered feedback.
 FEEDBACK_MAX_AGE_DAYS="${LO_FEEDBACK_MAX_AGE_DAYS:-14}"
+FEEDBACK_SINCE="${LO_FEEDBACK_SINCE:-1970-01-01T00:00:00Z}"
+# Whose comments steer the loop, comma-separated Linear display names, case
+# insensitive. Empty means everyone who can comment. MERGE_AUTHORS is the
+# stricter list for the one comment that is an action, not a steer: "merge".
+# The gate resolves both and stamps each FEEDBACK entry with may_merge, so the
+# tick never needs .env at the moment of the check.
+FEEDBACK_AUTHORS="${LO_FEEDBACK_AUTHORS:-}"
+MERGE_AUTHORS="${LO_MERGE_AUTHORS:-$TIER1}"
+# How many moved tickets get their comments fetched per probe. The rest wait:
+# the watermark only advances past what was actually fetched.
+FETCH_CAP="${LO_FETCH_CAP:-20}"
 
 mkdir -p "$STATE_DIR"
 STATE="$STATE_DIR/gate-state"
 QUEUE="$STATE_DIR/${PREFIX}-queue.json"
 WATERMARK="$STATE_DIR/${PREFIX}-watermark"
 PENDING="$STATE_DIR/${PREFIX}-pending.json"
+LERR_STAMP="$STATE_DIR/linear-error-wake"
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
 # The machine/human discriminator, as a jq regex. The convention is a visible
@@ -130,19 +150,17 @@ probe() {
   held=$(printf '%s' "$live_branches" | jq -Rsc 'split("\n") | map(select(length>0))')
 
   # --- work already in an agent's hands ---
-  # The branch test above cannot see an agent that has not run `gh pr checkout`
-  # yet, and "yet" can be half an hour: an agent sent to answer a question reads
-  # the code long before it touches the branch. A fresh ticket has the same
-  # blind window in reverse — an agent reads the ticket and the code long
-  # before its draft PR exists, and in that window the ticket sits in Todo
-  # looking untaken. (The ticket status cannot close it any more: Todo means
-  # "the machine's ball" for the whole working period, not just the wait.)
-  # So a dispatch writes the agent's SLOT into a file named after the work —
-  # the PR number for work aimed at an existing PR, the ticket id for a fresh
-  # ticket — and that work is in hand for precisely as long as the slot's lock
-  # is alive. An agent that dies frees its work on the next probe; one that
-  # finishes frees it the moment its lock goes. The 10-minute floor covers
-  # only the seconds between the spawn and the marker.
+  # The branch test above cannot see an agent that has not touched its branch
+  # yet, and "yet" can be half an hour: an agent reads the ticket and the code
+  # long before it cuts a branch or runs `gh pr checkout`. In that window the
+  # work looks untaken. (The ticket status cannot close it any more: Todo
+  # means "the machine's ball" for the whole working period, not just the
+  # wait.) So a dispatch writes the agent's SLOT into a file named after the
+  # work — the PR number for work aimed at an existing PR, the ticket id for a
+  # fresh ticket — and that work is in hand for precisely as long as the
+  # slot's lock is alive. An agent that dies frees its work on the next probe;
+  # one that finishes frees it the moment its lock goes. The 10-minute floor
+  # covers only the seconds between the spawn and the marker.
   dispatch_dir="$STATE_DIR/dispatched"
   mkdir -p "$dispatch_dir"
   now_s=$(date +%s)
@@ -205,41 +223,42 @@ probe() {
             | .head as $h | select($held | index($h) | not) | .pr ]')
 
   # --- the conversation: Linear, on a persisted watermark ---
-  # One list_issues per probe answers "did anything move since the last probe".
-  # Only the moved, in-scope tickets get their comments fetched, in parallel.
-  # Failure is a GATE-ERROR, not a note — a deaf gate now means unanswered
-  # humans — and NOTHING advances on failure: no watermark, no pending prune.
-  # Advancing state around a failed fetch is how one transient timeout would
-  # swallow a comment forever.
   feedback=''
-  linear_ok=yes
-  fetch_failed=no
+  in_scope='[]'
+  lerr=""
   if [ -x "$AC" ] || command -v "$AC" >/dev/null 2>&1; then
     wm=$(cat "$WATERMARK" 2>/dev/null)
-    [ -z "$wm" ] && wm=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)
+    if [ -z "$wm" ]; then
+      # First run, or a wiped state dir. Look back the whole feedback window
+      # and let the capped fetch drain it over successive probes — this is
+      # what makes the local files a cache of Linear rather than the record:
+      # losing them re-scans, it does not forget.
+      wm=$(date -u -v-${FEEDBACK_MAX_AGE_DAYS}d +%Y-%m-%dT%H:%M:%SZ)
+      notes="$notes${notes:+; }watermark initialized, rescanning ${FEEDBACK_MAX_AGE_DAYS}d"
+    fi
     mj=$("$AC" call linear list_issues \
       --json "{\"team\":\"$TEAM\",\"updatedAt\":\"$wm\",\"orderBy\":\"updatedAt\",\"includeArchived\":false,\"limit\":100,\"fields\":[\"status\",\"updatedAt\"]}" \
       --text 2>/dev/null)
-    if [ -z "$mj" ]; then
-      linear_ok=no
+    if [ -z "$mj" ] || ! printf '%s' "$mj" | jq -e '.issues' >/dev/null 2>&1; then
+      lerr="linear unreachable (token expired? claude mcp login linear)"
+    elif [ "$(printf '%s' "$mj" | jq -r '.hasNextPage // false')" = "true" ]; then
+      # More than 100 tickets moved since the watermark. The server returns
+      # the NEWEST first, so advancing any watermark here would skip the
+      # oldest movers forever. Refuse, and let the model decide — this only
+      # happens on a workspace-scale event, never on a normal night.
+      lerr="over 100 tickets moved since watermark $wm; refusing to advance — clear or advance the watermark deliberately"
     else
       # Everything that moved, oldest first — the order is what lets a capped
       # probe advance the watermark only past what it actually fetched.
-      all_moved=$(printf '%s' "$mj" | jq -c '[ .issues[]? | {id, status, updatedAt} ] | sort_by(.updatedAt)')
-      # In scope: the four statuses the loop answers for. Out-of-scope moves
-      # still matter once: a pending entry whose ticket left scope (canceled,
-      # dragged to backlog) is pruned below, or it would wake the loop forever.
-      in_scope=$(printf '%s' "$all_moved" | jq -c --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" --arg m "$MERGED_STATUS" --arg d "$DONE_STATUS" '
-        [ .[] | select(.status == $r or .status == $h or .status == $m or .status == $d) ]')
-      out_of_scope=$(printf '%s' "$all_moved" | jq -c --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" --arg m "$MERGED_STATUS" --arg d "$DONE_STATUS" '
-        [ .[] | select(.status != $r and .status != $h and .status != $m and .status != $d) | .id ]')
-      # Fetch comments for the 20 OLDEST in-scope movers. Taking the oldest is
-      # load-bearing: the watermark then advances to the last FETCHED ticket,
-      # so under catch-up load (a day down, a bulk triage, the migration night
-      # itself) the rest still match "updated after watermark" on the next
-      # probe instead of being skipped forever.
-      fetch=$(printf '%s' "$in_scope" | jq -c '.[0:20]')
+      sc=$(printf '%s' "$mj" | jq -c --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" --arg m "$MERGED_STATUS" --arg d "$DONE_STATUS" '
+        ([ .issues[]? | {id, status, updatedAt} ] | sort_by(.updatedAt)) as $all
+        | { inn: [ $all[] | select(.status == $r or .status == $h or .status == $m or .status == $d) ],
+            out: [ $all[] | select(.status != $r and .status != $h and .status != $m and .status != $d) | .id ],
+            last: ($all | last.updatedAt) }')
+      in_scope=$(printf '%s' "$sc" | jq -c '.inn')
+      out_of_scope=$(printf '%s' "$sc" | jq -c '.out')
       n_in_scope=$(printf '%s' "$in_scope" | jq 'length')
+      fetch=$(printf '%s' "$in_scope" | jq -c --argjson cap "$FETCH_CAP" '.[0:$cap]')
       fetched_ids='[]'
       fresh_feedback='[]'
       fetch_ids=$(printf '%s' "$fetch" | jq -r '.[].id')
@@ -250,12 +269,14 @@ probe() {
             > "$ctmp/$id.json" 2>/dev/null &
         done
         wait
+        # The rolling floor, then the absolute one — ISO-8601 sorts lexically,
+        # so the later of the two is just the bigger string.
         floor=$(date -u -v-${FEEDBACK_MAX_AGE_DAYS}d +%Y-%m-%dT%H:%M:%SZ)
+        [ "$FEEDBACK_SINCE" \> "$floor" ] && floor="$FEEDBACK_SINCE"
         for id in $fetch_ids; do
           if ! jq -e '.comments' "$ctmp/$id.json" >/dev/null 2>&1; then
-            fetch_failed=yes; continue
+            lerr="comment fetch failed for $id"; continue
           fi
-          fetched_ids=$(printf '%s' "$fetched_ids" | jq -c --arg t "$id" '. + [$t]')
           st=$(printf '%s' "$fetch" | jq -r --arg t "$id" '.[] | select(.id == $t) | .status')
           # A thread is unanswered when its newest human comment is newer than
           # its newest 🌙 reply. Existence of a 🌙 reply is not enough — a
@@ -269,9 +290,16 @@ probe() {
           # comment guarantee one on every worked ticket). Without that test,
           # two teammates discussing their own In Progress ticket would wake
           # the loop into a conversation that is none of its business.
-          fb=$(jq -c --arg t "$id" --arg st "$st" --arg r "$READY_STATUS" --arg floor "$floor" --arg moon "$MOON" '
-            def ismoon: ((.body // "") | split("\n")[0] | test($moon));
-            ([ .comments[]? | select(ismoon) ] | length > 0) as $loopspoke
+          #
+          # may_merge is resolved HERE, from MERGE_AUTHORS, because the tick
+          # has no .env at the moment it reads a "merge" comment — the entry
+          # itself must carry the verdict.
+          fb=$(jq -c --arg t "$id" --arg st "$st" --arg r "$READY_STATUS" --arg floor "$floor" \
+                     --arg moon "$MOON" --arg allow "$FEEDBACK_AUTHORS" --arg mauth "$MERGE_AUTHORS" '
+            def ismoon: ((.body // "") | split("\n") | (first // "") | test($moon));
+            def csv($s): ($s | ascii_downcase | split(",") | map(gsub("^ +| +$"; "")) | map(select(length > 0)));
+            (csv($allow)) as $who | (csv($mauth)) as $mm
+            | ([ .comments[]? | select(ismoon) ] | length > 0) as $loopspoke
             | if ($st != $r) and ($loopspoke | not) then [] else
               ( [ .comments[]? ] | group_by(.parentId // .id) | map(
                 ( [ .[] | select(ismoon | not) ] | max_by(.createdAt) ) as $hum
@@ -279,15 +307,22 @@ probe() {
                 | select($hum != null)
                 | select($hum.createdAt > $floor)
                 | select($mn == null or $mn.createdAt < $hum.createdAt)
+                | (($hum.author.name // "") | ascii_downcase) as $w
+                | select(($who | length) == 0 or (($who | index($w)) != null))
                 | { ticket: $t, thread: ($hum.parentId // $hum.id), comment: $hum.id,
-                    who: $hum.author.name, at: $hum.createdAt } ) )
+                    who: $hum.author.name, at: $hum.createdAt,
+                    may_merge: ((($mm | length) > 0) and (($mm | index($w)) != null)) } ) )
               end' "$ctmp/$id.json" 2>/dev/null)
-          [ -n "$fb" ] && fresh_feedback=$(printf '%s\n%s' "$fresh_feedback" "$fb" | jq -cs 'add')
+          if [ $? -ne 0 ] || [ -z "$fb" ]; then
+            lerr="feedback parse failed for $id"; continue
+          fi
+          fetched_ids=$(printf '%s' "$fetched_ids" | jq -c --arg t "$id" '. + [$t]')
+          fresh_feedback=$(printf '%s\n%s' "$fresh_feedback" "$fb" | jq -cs 'add')
         done
         rm -rf "$ctmp"
       fi
 
-      if [ "$fetch_failed" = no ]; then
+      if [ -z "$lerr" ]; then
         # Pending survives the watermark. An unanswered thread stays in the
         # file until a later fetch of that ticket shows it answered — which
         # happens naturally, because the ack bumps the ticket's updatedAt.
@@ -301,33 +336,46 @@ probe() {
         printf '%s' "$feedback" > "$PENDING"
         # Watermark: past everything seen when nothing was capped; only past
         # the last fetched ticket when the probe hit the fetch cap.
-        if [ "$n_in_scope" -gt 20 ]; then
+        if [ "$n_in_scope" -gt "$FETCH_CAP" ]; then
           new_wm=$(printf '%s' "$fetch" | jq -r 'last.updatedAt // empty')
-          notes="$notes${notes:+; }linear catch-up: $n_in_scope moved, fetched 20 oldest"
+          notes="$notes${notes:+; }linear catch-up: $n_in_scope moved, fetched $FETCH_CAP oldest"
         else
-          new_wm=$(printf '%s' "$all_moved" | jq -r 'last.updatedAt // empty')
+          new_wm=$(printf '%s' "$sc" | jq -r '.last // empty')
         fi
         [ -n "$new_wm" ] && printf '%s' "$new_wm" > "$WATERMARK"
       fi
     fi
   else
-    linear_ok=no
+    lerr="agent-codemode CLI not found"
   fi
-  if [ "$linear_ok" = no ] || [ "$fetch_failed" = yes ]; then
-    echo "GATE-ERROR: linear unreachable or a comment fetch failed (token expired? claude mcp login linear); state NOT advanced"
-    return 0
-  fi
+
+  # On any Linear failure the ledger is the last good pending file — stale but
+  # true, never pruned by a failed probe — and drift is skipped. The GitHub
+  # half of the block below prints either way: a dead token must not blind the
+  # gate to a conflicting promoted PR it can see with gh alone.
   [ -z "$feedback" ] && feedback=$(cat "$PENDING" 2>/dev/null); [ -z "$feedback" ] && feedback='[]'
   n_feedback=$(printf '%s' "$feedback" | jq 'length')
 
   # --- status drift: the draft bit and the ticket status are one fact ---
   # isDraft ⇔ READY_STATUS, promoted ⇔ HUMAN_STATUS, for every ticket the loop
-  # owns. The gate only sees drift on tickets that moved this probe (that is
-  # what changed the world); the tick decides what each direction MEANS — a
-  # human dragging a promoted ticket back to READY is a rework order, not an
-  # error to repair — see SKILL.md 2b.
-  drift=$(jq -cn --argjson v "$verdicts" --argjson m "${in_scope:-[]}" --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" '
-    [ $m[] | . as $t | ($v[] | select(.mine and .ticket == ($t.id | ascii_upcase))) as $pr
+  # owns. This is the fast path — it sees drift on tickets that moved in
+  # Linear this probe; drift born on the GitHub side (a human runs `gh pr
+  # ready`, a status write fails) is caught by the WORK_CACHE rebuild, which
+  # reconciles every loop PR against its ticket every 30 minutes (SKILL 2b).
+  # The tick decides what each direction MEANS — a human dragging a promoted
+  # ticket back to READY is a rework order, not an error to repair.
+  # Where one ticket has several loop PRs (a superseded draft beside the live
+  # one), the authoritative PR is the newest promoted one, else the newest —
+  # a leftover draft must not read as drift against a correctly-promoted
+  # ticket.
+  drift=$(jq -cn --argjson v "$verdicts" --argjson m "$in_scope" --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" '
+    def apr($t): [ $v[] | select(.mine and .ticket == ($t | ascii_upcase)) ]
+      | if length == 0 then null
+        else sort_by(.pr) as $s
+          | ([ $s[] | select(.draft | not) ]) as $p
+          | (if ($p | length) > 0 then ($p | last) else ($s | last) end)
+        end;
+    [ $m[] | . as $t | apr($t.id) as $pr | select($pr != null)
       | ( if $pr.draft and $t.status == $h then {ticket: $t.id, pr: $pr.pr, is: $t.status, should: $r}
           elif ($pr.draft | not) and $t.status == $r then {ticket: $t.id, pr: $pr.pr, is: $t.status, should: $h}
           else empty end ) ]')
@@ -341,7 +389,7 @@ probe() {
   # judgment drop-rules and dedups against open PRs. New candidate -> hash change.
   # Tickets already in an agent's hands (dispatch marker) never reach the line.
   todo_ids=""
-  if [ "$slots" -gt 0 ]; then
+  if [ "$slots" -gt 0 ] && [ -z "$lerr" ]; then
     tj=$("$AC" call linear list_issues \
       --json "{\"team\":\"$TEAM\",\"state\":\"$READY_STATUS\",\"includeArchived\":false,\"fields\":[\"assignee\",\"archivedAt\",\"status\"]}" \
       --text 2>/dev/null)
@@ -357,15 +405,12 @@ probe() {
       notes="$notes${notes:+; }linear todo query failed"
     fi
     # Subtract the ids the model has already judged un-runnable. They live in
-    # QUEUE's `skipped` list, written by the last rebuild. Without this a ticket
-    # the loop will never take stays in todo_ids forever, and the rule below
-    # ("ids present AND the world hash moved") then fires on every commit, CI
-    # transition and comment that the running agents produce — a wake every
-    # couple of minutes with nothing to do. Seen on a real run with HYR2-972.
-    # (Under the new rules a skip moves the ticket to HUMAN_STATUS, so this
-    # list only carries the not-yet-acted-on tail of a rebuild.)
+    # QUEUE's `skipped` list, written by the last rebuild — entries may be
+    # bare id strings or {id, why} objects; accept both, or a shape drift
+    # silently disables the subtraction and revives the wake-storm this
+    # exists to prevent (seen on a real run with HYR2-972).
     if [ -n "$todo_ids" ] && [ -f "$QUEUE" ]; then
-      skipped=$(jq -r '[.skipped[]?.id] | join(",")' "$QUEUE" 2>/dev/null)
+      skipped=$(jq -r '[.skipped[]? | if type == "string" then . else .id end] | join(",")' "$QUEUE" 2>/dev/null)
       if [ -n "$skipped" ]; then
         todo_ids=$(printf '%s' "$todo_ids" | tr ',' '\n' \
           | grep -vxF -f <(printf '%s' "$skipped" | tr ',' '\n') \
@@ -385,6 +430,23 @@ probe() {
     fi
   fi
 
+  # --- Linear failure: wake once, then damp ---
+  # The first failed probe wakes the model (it can fix the token); repeats
+  # inside the damping window are a NO with the reason, so a dead token at
+  # 01:00 costs one turn, not one a minute until morning. Any healthy probe
+  # clears the damp.
+  lerr_wake=no
+  if [ -n "$lerr" ]; then
+    last_lerr=$(stat -f %m "$LERR_STAMP" 2>/dev/null || echo 0)
+    if [ $(( $(date +%s) - last_lerr )) -gt 900 ]; then
+      touch "$LERR_STAMP"
+      lerr_wake=yes
+    fi
+    notes="$notes${notes:+; }GATE-ERROR: $lerr; linear state NOT advanced"
+  else
+    rm -f "$LERR_STAMP"
+  fi
+
   # --- did anything change since last tick? ---
   hash=$(printf '%s|%s|%s|%s' "$verdicts" "$todo_ids" "$feedback" "$drift" | shasum | cut -c1-16)
   prev=$(cat "$STATE" 2>/dev/null)
@@ -396,6 +458,7 @@ probe() {
   # ticket are all free. Only the rework behind it needs an agent.
   [ "$n_feedback" -gt 0 ] && work=yes
   [ "$n_drift"   -gt 0 ] && work=yes            # a status move is free too
+  [ "$lerr_wake" = yes ] && work=yes            # first failure in 15m wakes
   [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && work=yes
   # A stale queue is only work when Linear has something to rebuild it FROM.
   # Without this the loop wakes every 30 minutes on an empty ready column, to
@@ -447,9 +510,11 @@ probe() {
     # slot for would wake the model every few minutes, which is the whole cost
     # --wait exists to remove.
     #
-    # Only a probe the MODEL saw may move the state forward. In --wait the
-    # quiet probes leave it alone, so a world that changed while the machine
-    # was full is still "changed" on the probe that finally wakes.
+    # Only a probe the MODEL saw may move the state hash forward. In --wait
+    # the quiet probes leave it alone, so a world that changed while the
+    # machine was full is still "changed" on the probe that finally wakes.
+    # (The watermark is different: it may advance on quiet probes, because
+    # the pending file — not the watermark — is the ledger of what is owed.)
     [ "$MODE" != once ] && return 1
     if [ "$hash" = "$prev" ]; then
       printf '%s' "$hash" > "$STATE"
@@ -461,6 +526,7 @@ probe() {
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots"
+  [ -n "$lerr" ]            && echo "GATE-ERROR: $lerr; linear state NOT advanced, feedback below may be stale"
   [ -n "$notes" ]           && echo "notes: $notes"
   [ "$hash" != "$prev" ]    && echo "world-changed: yes"
   [ "$n_regate"  -gt 0 ]    && echo "REGATE: $regate"

@@ -26,8 +26,11 @@ impossible from a shell — **reads Linear directly**, through the
 The Linear read is a watermark poll: one `list_issues` call per probe asks
 "what moved since the last probe", and only the moved tickets get their
 comments fetched, in parallel. A quiet probe costs one subprocess and under a
-second; unanswered threads survive in a pending file on disk, so a restart or a
-`/clear` forgets nothing.
+second; unanswered threads survive in a pending file on disk, and even a wiped
+state dir only re-scans the feedback window from Linear rather than forgetting
+anything — the files are a cache of Linear, not the record. When the Linear
+side fails, nothing advances, the GitHub half of the report still prints, and
+the error wakes the model once and is then damped.
 
 `agent-codemode` inherits Claude Code's [Linear MCP](https://linear.app/docs/mcp)
 OAuth from the Keychain, so the gate queries Linear with **no token, no model and
