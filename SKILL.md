@@ -48,7 +48,7 @@ never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
 `MAX_AGENTS` = `min(MAX_AGENTS_CAP, floor(ram / RAM_PER_AGENT_GB))`.
 
 **Precondition: your repo must have its own agent guide.** The prompt this skill
-hands each agent is eleven short paragraphs *because* `AGENT_GUIDE` supplies the
+hands each agent is twelve short paragraphs *because* `AGENT_GUIDE` supplies the
 rest — branching, local checks, the PR template, e2e testing, security. Point it
 at a repo with no such file and you get an unattended Opus agent on
 `--dangerously-skip-permissions` with almost no instructions. Write the guide
@@ -308,6 +308,15 @@ ids. That numbering is the whole interface between a one-line review comment and
 the next night's work — so quote the item into the ticket rather than paraphrasing
 it, and never renumber the section.
 
+**A research PR's numbered options work the same way**, and they are the reason
+that PR exists. Its body ends in a numbered list of what to do next, and its
+`## Blocked on` line asks the reader to pick one. "do 2", "let us go with 3", or
+a bare "2" is therefore a start order: read option 2 out of the body, create the
+ticket in `READY_STATUS` with the option quoted verbatim and the research PR
+linked, and ack with the ticket id. Take the numbers from whichever list the
+reader is answering — a research PR's options, or `## Out of scope &
+Suggestions` — and when a PR carries both, say in the ack which list you read.
+
 ##### Never create a ticket that already exists
 
 **A comment is not always a person typing.** Other automated loops on this
@@ -452,7 +461,9 @@ promote on the spot if it is there — before classifying anything else:
   and a substring test promotes it unreviewed. Seen on a real run.
   The agent hit something no
   agent can pass: a credential nobody stored, an account nobody connected, a
-  decision only a person can make. **Take it out of draft now**
+  decision only a person can make. **A research ticket lands here by design** —
+  its answer is the body and the decision it asks for is the blocker, so promote
+  it on the same line, empty diff and all. **Take it out of draft now**
   (`gh pr ready <PR#>`), unfinished, unreviewed, whatever state the code is in,
   and comment with the blocker as the opening line, never inside a `<details>`.
 
@@ -586,11 +597,30 @@ Never take a ticket assigned to anyone else.
   forbids that without the user in the chat, and there is no user at 03:00.
 - It needs an artifact no agent has: a design file, a customer decision, a
   credential nobody stored, access to an account that is not connected.
-- It is a research or discussion ticket with no code outcome.
-
 Skipping is not the same as blocking. A ticket with a vague description is
 **fine to take** — deciding what it meant is the agent's job (see Decisions
-below). Only skip when no amount of good judgment produces a diff.
+below). Only skip when the ticket asks for something no agent may do, or for
+something no agent can reach.
+
+**A research ticket is work, not a skip.** It asks a question, and the answer is
+the deliverable: a PR whose body carries the finding, the numbers behind it, and
+the options — with an empty diff, or close to one. Never drop such a ticket for
+producing no code, and never invent a diff to justify it. A PR that answers the
+question and changes nothing is the right outcome, and an empty commit is enough
+to open it.
+
+Such a PR is finished the moment the answer is written and a person must pick
+what happens next. So it ships **out of draft**, with `## Blocked on` naming the
+decision that is owed (2c) — green, unreviewed, waiting on a human, which is
+exactly what the ticket asked for.
+
+**The body has to be choosable.** The finding is only half of it; the other half
+is a **numbered list of what to do next**, each entry naming the work, its cost,
+and what it would break. `## Blocked on` then says which numbers are on offer and
+asks the reader to reply with one. That is the whole handover: the person reads
+the finding, comments "do 2", and the loop turns that number into the ticket that
+starts the work (2a). A research PR that ends in prose with no numbered options
+gives the reader nothing to answer, and the answer is the point.
 
 **Order what is left** by priority (1 Urgent → 4 Low, 0 None last), then oldest
 `updatedAt` first, and write the whole ordered list to `QUEUE_CACHE` with a
@@ -778,6 +808,13 @@ true only here:
 > tick, because the person who can unblock it is the one person a draft hides it
 > from.
 >
+> **A ticket that asks a question is answered in the PR body, not in code.** Put
+> the finding there with the numbers behind it, then a **numbered list of what to
+> do next** — each entry the work, its cost, and what it would break — and a
+> `## Blocked on` line asking the reader to reply with a number. The diff stays
+> empty, or near it: do not build the fix, and do not manufacture a diff to look
+> busy. The reader comments "do 2", and that number becomes the next ticket.
+>
 > **Open the draft PR before you write any code** — right after you cut the
 > branch, with one empty commit if you need something to push. Its body is the
 > marker line, whatever heading lines your repo's template puts first, and then a
@@ -843,8 +880,9 @@ of this table. Pass `gitBranchName` verbatim from the tracker rather than
 inventing a branch name: it is what makes the tracker link the PR back to the
 ticket by itself.
 
-Keep all eleven paragraphs. Each covers something no file in the copy says: the
-no-confirmation rule, Decisions, what counts as one, the PR opened first, the body kept current, the
+Keep all twelve paragraphs. Each covers something no file in the copy says: the
+no-confirmation rule, Decisions, what counts as one, a research ticket answered
+in the body, the PR opened first, the body kept current, the
 marker, every section collapsed, where the screenshots go and how they are
 uploaded, the two `cca` footguns, the do-not-review rule, and the closing
 sequence. Everything else the
