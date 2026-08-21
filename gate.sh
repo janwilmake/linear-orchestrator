@@ -45,27 +45,31 @@ WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re
 # Where the gate keeps its state files. Overridable so a test run of a new
 # gate never clobbers the live loop's watermark and hash.
 STATE_DIR="${LO_STATE_DIR:-$HOME/.claude/linear-orchestrator}"
-# Ticket statuses, by role. READY is the machine's ball (ready, worked,
-# conflicting — all of it); HUMAN is a person's; MERGED is merged-awaiting-
-# verification; DONE is verified. Comments on all four reach the loop — Done
-# included, because "merge, then note the follow-up the diff left out" is the
-# flow the whole system exists for. Canceled and backlog-type never do.
+# Ticket statuses, by ROLE — names matter for what a status means to the loop.
+# Scope (which tickets the loop listens on at all) is matched by status TYPE,
+# not name, so a workspace with extra columns ("Shipped" beside "Done", a
+# renamed anything) never silently falls out of the ledger: unstarted, started
+# and completed types are in scope; backlog, triage, canceled and duplicate
+# types are not.
 READY_STATUS="${LO_READY_STATUS:-Todo}"
 HUMAN_STATUS="${LO_HUMAN_STATUS:-In Progress}"
 MERGED_STATUS="${LO_MERGED_STATUS:-In review}"
-DONE_STATUS="${LO_DONE_STATUS:-Done}"
 # Two floors keep history from reading as instructions. The rolling one drops
-# human comments older than N days; the absolute one (set it to the moment of
-# cutover) drops everything from before the loop answered on Linear at all —
+# human comments older than N days; the absolute one (SET IT TO THE MOMENT OF
+# CUTOVER) drops everything from before the loop answered on Linear at all —
 # a re-statused ticket's last-two-weeks of pre-cutover triage chatter carries
 # no 🌙 replies and would otherwise flood in as unanswered feedback.
 FEEDBACK_MAX_AGE_DAYS="${LO_FEEDBACK_MAX_AGE_DAYS:-14}"
 FEEDBACK_SINCE="${LO_FEEDBACK_SINCE:-1970-01-01T00:00:00Z}"
-# Whose comments steer the loop, comma-separated Linear display names, case
-# insensitive. Empty means everyone who can comment. MERGE_AUTHORS is the
-# stricter list for the one comment that is an action, not a steer: "merge".
-# The gate resolves both and stamps each FEEDBACK entry with may_merge, so the
-# tick never needs .env at the moment of the check.
+# Whose comments steer the loop, comma-separated, case insensitive. Entries
+# may be Linear display names OR member UUIDs — prefer UUIDs where it
+# matters: display names are self-editable, so a name is convenience, not
+# authentication. Empty means everyone who can comment (also meaning: any
+# integration or automation that comments without a leading 🌙 reads as a
+# person — set this list if your workspace has such apps).
+# MERGE_AUTHORS is the stricter list for the one comment that is an action,
+# not a steer: "merge". The gate resolves both and stamps each FEEDBACK entry
+# with may_merge, so the tick never needs .env at the moment of the check.
 FEEDBACK_AUTHORS="${LO_FEEDBACK_AUTHORS:-}"
 MERGE_AUTHORS="${LO_MERGE_AUTHORS:-$TIER1}"
 # How many moved tickets get their comments fetched per probe. The rest wait:
@@ -78,14 +82,16 @@ QUEUE="$STATE_DIR/${PREFIX}-queue.json"
 WATERMARK="$STATE_DIR/${PREFIX}-watermark"
 PENDING="$STATE_DIR/${PREFIX}-pending.json"
 LERR_STAMP="$STATE_DIR/linear-error-wake"
+FB_STAMP="$STATE_DIR/feedback-wake"
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
-# The machine/human discriminator, as a jq regex. The convention is a visible
-# 🌙 at the start of the first line; comments written before the convention
-# (and GitHub-side bodies) may carry the HTML-comment form instead. Anchored
-# to line start on purpose: a human QUOTING a loop comment mid-sentence
-# ("your 🌙 review missed the null case") must still read as a human, or their
-# steering is silently classified as the machine and never answered.
+# The machine/human discriminator, as a jq regex, applied to the FIRST LINE of
+# a body — comments and PR bodies alike. The convention is a visible 🌙 at the
+# start of the first line; comments written before the convention (and legacy
+# GitHub bodies) may carry the HTML-comment form instead. First-line-anchored
+# on purpose, on both sides: a human QUOTING a loop line ("🌙 review — …")
+# deeper in their text must still read as a human, or their comment is never
+# answered — and their PR would read as the loop's own to re-draft and push to.
 MOON='^(🌙|<!-- 🌙)'
 
 MODE=once
@@ -202,7 +208,7 @@ probe() {
 
   verdicts=$(printf '%s' "$prs" | jq -c --arg pfx "$PREFIX" --arg moon "$MOON" '[ .[] | {
       pr: .number, draft: .isDraft, merge: .mergeable, head: .headRefName,
-      mine: ((.body // "") | test("(?m)\($moon)")),
+      mine: ((.body // "") | split("\n") | (first // "") | test($moon)),
       ticket: (.headRefName | [match("\($pfx)-[0-9]+"; "ig").string] | (first // "") | ascii_upcase),
       ci: ( [ .statusCheckRollup[]? | select(.conclusion != null
                 and .conclusion != "SKIPPED" and .conclusion != "NEUTRAL") ] as $c
@@ -237,7 +243,7 @@ probe() {
       notes="$notes${notes:+; }watermark initialized, rescanning ${FEEDBACK_MAX_AGE_DAYS}d"
     fi
     mj=$("$AC" call linear list_issues \
-      --json "{\"team\":\"$TEAM\",\"updatedAt\":\"$wm\",\"orderBy\":\"updatedAt\",\"includeArchived\":false,\"limit\":100,\"fields\":[\"status\",\"updatedAt\"]}" \
+      --json "{\"team\":\"$TEAM\",\"updatedAt\":\"$wm\",\"orderBy\":\"updatedAt\",\"includeArchived\":true,\"limit\":100,\"fields\":[\"status\",\"statusType\",\"assignee\",\"archivedAt\",\"updatedAt\"]}" \
       --text 2>/dev/null)
     if [ -z "$mj" ] || ! printf '%s' "$mj" | jq -e '.issues' >/dev/null 2>&1; then
       lerr="linear unreachable (token expired? claude mcp login linear)"
@@ -250,10 +256,17 @@ probe() {
     else
       # Everything that moved, oldest first — the order is what lets a capped
       # probe advance the watermark only past what it actually fetched.
-      sc=$(printf '%s' "$mj" | jq -c --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" --arg m "$MERGED_STATUS" --arg d "$DONE_STATUS" '
-        ([ .issues[]? | {id, status, updatedAt} ] | sort_by(.updatedAt)) as $all
-        | { inn: [ $all[] | select(.status == $r or .status == $h or .status == $m or .status == $d) ],
-            out: [ $all[] | select(.status != $r and .status != $h and .status != $m and .status != $d) | .id ],
+      # Scope is matched by status TYPE (see the config comment), and
+      # includeArchived is deliberately true: an archived or canceled ticket
+      # must be SEEN ONCE so its pending entries can be pruned, or an
+      # unanswered entry on it would wake the loop forever.
+      sc=$(printf '%s' "$mj" | jq -c '
+        ([ .issues[]? | {id, status, statusType, assignee: (.assignee // ""), archivedAt, updatedAt} ]
+          | sort_by(.updatedAt)) as $all
+        | { inn: [ $all[] | select(.archivedAt == null)
+                   | select(.statusType == "unstarted" or .statusType == "started" or .statusType == "completed") ],
+            out: [ $all[] | select(.archivedAt != null
+                   or (.statusType != "unstarted" and .statusType != "started" and .statusType != "completed")) | .id ],
             last: ($all | last.updatedAt) }')
       in_scope=$(printf '%s' "$sc" | jq -c '.inn')
       out_of_scope=$(printf '%s' "$sc" | jq -c '.out')
@@ -278,40 +291,53 @@ probe() {
             lerr="comment fetch failed for $id"; continue
           fi
           st=$(printf '%s' "$fetch" | jq -r --arg t "$id" '.[] | select(.id == $t) | .status')
-          # A thread is unanswered when its newest human comment is newer than
-          # its newest 🌙 reply. Existence of a 🌙 reply is not enough — a
-          # human can reply again into an already-answered thread, and an
-          # existence test would swallow that silently.
+          asg=$(printf '%s' "$fetch" | jq -r --arg t "$id" '.[] | select(.id == $t) | .assignee')
+          # Eligibility: on READY tickets within the assignee tiers (or
+          # unassigned) every comment steers the machine — that is what the
+          # status means. Everywhere else — human-side statuses, and READY
+          # tickets assigned outside the tiers, which the loop may never
+          # work — the ticket is only the loop's if the loop has spoken on
+          # it (a 🌙 comment exists: the pickup note, the review and the
+          # promotion comment guarantee one on every worked ticket). Without
+          # this, two teammates discussing their own ticket would wake the
+          # loop into a conversation that is none of its business.
+          eligible=no
+          if [ "$st" = "$READY_STATUS" ]; then
+            if [ -z "$asg" ] || [ "$asg" = "$TIER1" ] || [ "$asg" = "$TIER2" ]; then eligible=yes; fi
+          fi
+          # A thread is unanswered when its newest ALLOWED human comment is
+          # newer than its newest 🌙 reply. "Allowed" matters inside the
+          # thread too: an unlisted bystander replying "+1" after a listed
+          # author's steer must not mask the steer — the newest comment that
+          # counts is the newest one from someone who may steer.
           #
-          # Ownership: on READY tickets every comment steers the machine —
-          # that is what the status means. On the human-side statuses the
-          # ticket is only the loop's if the loop has spoken on it (a 🌙
-          # comment exists — the pickup note, the review, the promotion
-          # comment guarantee one on every worked ticket). Without that test,
-          # two teammates discussing their own In Progress ticket would wake
-          # the loop into a conversation that is none of its business.
-          #
-          # may_merge is resolved HERE, from MERGE_AUTHORS, because the tick
-          # has no .env at the moment it reads a "merge" comment — the entry
-          # itself must carry the verdict.
-          fb=$(jq -c --arg t "$id" --arg st "$st" --arg r "$READY_STATUS" --arg floor "$floor" \
+          # may_merge is true when the thread holds an unanswered comment
+          # from a MERGE_AUTHORS member (matched by UUID or display name) —
+          # resolved HERE because the tick has no .env at the moment it reads
+          # a "merge" comment. 2a still verifies the command comment itself.
+          fb=$(jq -c --arg t "$id" --arg eligible "$eligible" --arg floor "$floor" \
                      --arg moon "$MOON" --arg allow "$FEEDBACK_AUTHORS" --arg mauth "$MERGE_AUTHORS" '
             def ismoon: ((.body // "") | split("\n") | (first // "") | test($moon));
             def csv($s): ($s | ascii_downcase | split(",") | map(gsub("^ +| +$"; "")) | map(select(length > 0)));
+            def inlist($l): ( ((.author.name // "") | ascii_downcase) as $w
+              | (.author.id // "" | ascii_downcase) as $i
+              | (($l | index($w)) != null) or (($l | index($i)) != null) );
             (csv($allow)) as $who | (csv($mauth)) as $mm
             | ([ .comments[]? | select(ismoon) ] | length > 0) as $loopspoke
-            | if ($st != $r) and ($loopspoke | not) then [] else
+            | if ($eligible != "yes") and ($loopspoke | not) then [] else
               ( [ .comments[]? ] | group_by(.parentId // .id) | map(
-                ( [ .[] | select(ismoon | not) ] | max_by(.createdAt) ) as $hum
-                | ( [ .[] | select(ismoon) ] | max_by(.createdAt) ) as $mn
+                ( [ .[] | select(ismoon) ] | max_by(.createdAt) ) as $mn
+                | ( [ .[] | select(ismoon | not)
+                      | select(($who | length) == 0 or inlist($who)) ] | max_by(.createdAt) ) as $hum
                 | select($hum != null)
                 | select($hum.createdAt > $floor)
                 | select($mn == null or $mn.createdAt < $hum.createdAt)
-                | (($hum.author.name // "") | ascii_downcase) as $w
-                | select(($who | length) == 0 or (($who | index($w)) != null))
+                | ([ .[] | select(ismoon | not) | select(inlist($mm))
+                     | select(.createdAt > $floor)
+                     | select($mn == null or .createdAt > $mn.createdAt) ] | length > 0) as $mmord
                 | { ticket: $t, thread: ($hum.parentId // $hum.id), comment: $hum.id,
-                    who: $hum.author.name, at: $hum.createdAt,
-                    may_merge: ((($mm | length) > 0) and (($mm | index($w)) != null)) } ) )
+                    who: $hum.author.name, who_id: ($hum.author.id // ""), at: $hum.createdAt,
+                    may_merge: $mmord } ) )
               end' "$ctmp/$id.json" 2>/dev/null)
           if [ $? -ne 0 ] || [ -z "$fb" ]; then
             lerr="feedback parse failed for $id"; continue
@@ -328,10 +354,19 @@ probe() {
         # happens naturally, because the ack bumps the ticket's updatedAt.
         # Prune only what this probe actually learned about: the tickets it
         # fetched (recomputed fresh) and the tickets it saw leave scope.
+        # Carried-forward entries get their may_merge re-checked against the
+        # CURRENT MERGE_AUTHORS — revoking someone's merge authority must
+        # revoke their already-stamped orders too.
         prev_pending=$(cat "$PENDING" 2>/dev/null); [ -z "$prev_pending" ] && prev_pending='[]'
         feedback=$(jq -cn --argjson prev "$prev_pending" --argjson fresh "$fresh_feedback" \
-                          --argjson f "$fetched_ids" --argjson gone "$out_of_scope" '
-          ([ $prev[] | select(.ticket as $t | ($f | index($t)) or ($gone | index($t)) | not) ] + $fresh)
+                          --argjson f "$fetched_ids" --argjson gone "$out_of_scope" --arg mauth "$MERGE_AUTHORS" '
+          def csv($s): ($s | ascii_downcase | split(",") | map(gsub("^ +| +$"; "")) | map(select(length > 0)));
+          (csv($mauth)) as $mm
+          | ([ $prev[] | select(.ticket as $t | ($f | index($t)) or ($gone | index($t)) | not)
+              | if .may_merge == true
+                then .may_merge = ((($mm | index(((.who // "") | ascii_downcase))) != null)
+                                or (($mm | index(((.who_id // "") | ascii_downcase))) != null))
+                else . end ] + $fresh)
           | unique_by(.comment)')
         printf '%s' "$feedback" > "$PENDING"
         # Watermark: past everything seen when nothing was capped; only past
@@ -363,7 +398,8 @@ probe() {
   # ready`, a status write fails) is caught by the WORK_CACHE rebuild, which
   # reconciles every loop PR against its ticket every 30 minutes (SKILL 2b).
   # The tick decides what each direction MEANS — a human dragging a promoted
-  # ticket back to READY is a rework order, not an error to repair.
+  # ticket back to READY is a rework order, a failed write after promotion is
+  # not; 2b tells them apart before acting.
   # Where one ticket has several loop PRs (a superseded draft beside the live
   # one), the authoritative PR is the newest promoted one, else the newest —
   # a leftover draft must not read as drift against a correctly-promoted
@@ -455,8 +491,20 @@ probe() {
   work=no
   [ "$n_regate"  -gt 0 ] && work=yes            # acted on even at slots 0
   # Feedback needs no slot to act on: an ack, a status move and a follow-up
-  # ticket are all free. Only the rework behind it needs an agent.
-  [ "$n_feedback" -gt 0 ] && work=yes
+  # ticket are all free. Only the rework behind it needs an agent. But it is
+  # damped: NEW feedback (hash moved) wakes immediately; feedback the model
+  # already saw and could not clear — a deleted ticket's orphan entry, an ack
+  # that failed — re-wakes at most every 15 minutes instead of every probe.
+  # And while Linear is down the pending ledger is unactionable (an ack could
+  # not be posted), so it never counts as work — the single lerr wake covers
+  # telling the model.
+  if [ -z "$lerr" ] && [ "$n_feedback" -gt 0 ]; then
+    last_fb=$(stat -f %m "$FB_STAMP" 2>/dev/null || echo 0)
+    if [ "$hash" != "$prev" ] || [ $(( $(date +%s) - last_fb )) -gt 900 ]; then
+      work=yes
+      touch "$FB_STAMP"
+    fi
+  fi
   [ "$n_drift"   -gt 0 ] && work=yes            # a status move is free too
   [ "$lerr_wake" = yes ] && work=yes            # first failure in 15m wakes
   [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && work=yes
@@ -500,6 +548,7 @@ probe() {
       if [ -z "$todo_ids" ]; then why="$why; ready column empty"
       elif [ "$hash" = "$prev" ]; then why="$why; same todo ids as last tick"; fi
     fi
+    [ "$n_feedback" -gt 0 ] && why="$why; $n_feedback pending feedback (damped)"
     NOREASON="$why"
     [ -n "$notes" ] && NOREASON="$NOREASON; notes: $notes"
     [ "$hash" != "$prev" ] && NOREASON="$NOREASON; board changed, nothing actionable"

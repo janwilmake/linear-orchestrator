@@ -380,8 +380,15 @@ Steps, in order, loop **stopped**:
 5. **Merged/closed PRs and Done tickets: untouched.** History stays where it
    happened. (Decision — cheap to revisit; a backfill script can always run
    later.)
-6. **Config**: strip the dead vars from `.env` / `.env.example`; write the
-   initial watermark = cutover time.
+6. **Config**: strip the dead vars from `.env` / `.env.example`; set
+   `LO_FEEDBACK_SINCE` to the cutover moment (required — it is what keeps the
+   re-statused tickets' pre-cutover comments from flooding in as
+   instructions); set `LO_FEEDBACK_AUTHORS` to the people who may steer
+   (recommended: the team's names or UUIDs — an unset list means any
+   integration that comments reads as a person); set `LO_MERGE_AUTHORS` to
+   member UUIDs, not display names (names are self-editable). No initial
+   watermark is needed — a missing watermark re-scans the feedback window by
+   design.
 7. **Linear settings** (manual, in-app): delete the unused `conflicting` and
    `ci-red` team labels. In Hyre Ops → Workflows & automations, set
    **"On draft PR open" → No action** (was: In Progress) and **"On PR review
@@ -479,3 +486,36 @@ paths; all applied:
   window instead of forgetting.
 - **`skipped` shape pinned** in the queue schema (objects with `id` + `why`;
   the gate accepts bare strings too).
+
+A third review pass (15 confirmed) hardened the authorization and thread
+semantics; all applied:
+
+- **The newest comment that counts is the newest ALLOWED one**: a bystander's
+  "+1" after a listed author's steer (or merge order) no longer masks it —
+  the thread surfaces on the listed author's comment, and `may_merge` is true
+  when the thread holds any unanswered comment from a `MERGE_AUTHORS` member.
+- **UUIDs as identity**: both author lists accept member UUIDs, and the docs
+  say plainly that display names are self-editable convenience, not
+  authentication. Carried-forward pending entries get `may_merge` re-checked
+  against the current list every probe, so revoking authority revokes
+  already-stamped orders.
+- **Promotion is status-first** (save_issue, then `gh pr ready`, abort if the
+  write fails), and 2b rules out the failed-write look-alike (newest event =
+  the loop's own promotion comment) before treating promoted+Todo as a human
+  rework order — the loop can no longer un-promote its own finished work.
+- **Feedback wakes are damped**: new feedback (hash moved) wakes immediately;
+  an entry the model saw but could not clear re-wakes at most every 15
+  minutes; while Linear is down the unactionable ledger never counts as work.
+  Archived/canceled tickets are seen once (includeArchived) so their entries
+  prune instead of waking forever.
+- **Scope by status TYPE**, not name: unstarted/started/completed types are
+  listened on, backlog/triage/canceled/duplicate never — extra or renamed
+  columns cannot silently delete ledger entries. `LO_DONE_STATUS` is gone.
+- **Feedback eligibility respects the tiers**: READY tickets assigned outside
+  `TIER1`/`TIER2` need the loop to have spoken before their comments surface
+  — the loop no longer wakes on, or replies into, tickets it may never work.
+- **The 🌙 test is first-line on both sides** — a human PR quoting a loop
+  line is no longer classified as the loop's own to re-draft.
+- **`.env.example` honesty**: `LO_FEEDBACK_SINCE` is commented with a
+  REQUIRED-at-install note instead of shipping a plausible-looking inert
+  date; integrations-read-as-humans is documented on `FEEDBACK_AUTHORS`.
