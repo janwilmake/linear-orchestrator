@@ -224,10 +224,12 @@ something, and that outranks every conclusion the loop reached on its own.
 every agent posts through the user's own `gh`, so every comment on every PR
 carries the user's login. So the loop marks its own instead.
 
-> **Every comment the loop or one of its agents writes carries `<!-- 🌙 -->` as
-> its first line.** No exception — reviews, fix-pass replies, promotion comments,
-> de-gate notices, acks. An unmarked comment on a PR the loop opened is a person
-> talking to it.
+> **Every comment the loop or one of its agents writes on GitHub carries
+> `<!-- 🌙 -->` as its first line. On a Linear ticket, start with a visible `🌙`
+> instead** — Linear renders HTML comments as literal text (`<!-- 🌙 →`), so
+> the invisible form is garbage there. No exception — reviews, fix-pass
+> replies, promotion comments, de-gate notices, acks. An unmarked comment on a
+> PR the loop opened is a person talking to it.
 
 **The loop's own comments are collapsed. A person's are not.** Every review, every
 fix-pass reply and every de-gate notice goes inside a `<details>` whose summary
@@ -835,9 +837,12 @@ true only here:
 > screenshot. Start the PR body with:
 > `🌙 opened by the nightly orchestrator. Not seen by a human. Read the Decisions section before merging.`
 >
-> **Start every comment you write on the PR or the ticket with the line
-> `<!-- 🌙 -->`.** The orchestrator reads unmarked comments as a human talking to
-> it, and an unmarked comment of yours would be answered as if a person wrote it.
+> **Start every comment you write on the PR with the line `<!-- 🌙 -->`, and
+> every comment on the ticket with a visible `🌙` at the start of the first
+> line** — Linear renders HTML comments as literal text, so the invisible form
+> shows as garbage there. The orchestrator reads unmarked comments as a human
+> talking to it, and an unmarked comment of yours would be answered as if a
+> person wrote it.
 >
 > **Every section of the body is collapsed**, `## Decisions` included. Each one is a
 > `<details>` whose `<summary>` is the section name, with a blank line under the
