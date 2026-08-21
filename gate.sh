@@ -28,7 +28,7 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${LO_REPO:-/path/to/your/repo}"
 BASE="${LO_BASE:-dev}"
 TEAM="${LO_TEAM:-Your Team}"        # Linear team name
-PREFIX="${LO_PREFIX:-XXX}"          # ticket id prefix, e.g. HYR2
+PREFIX="${LO_PREFIX:-XXX}"          # ticket id prefix, e.g. PROJ
 TIER1="${LO_TIER1:-}"               # preferred assignee DISPLAY name (unassigned always eligible)
 TIER2="${LO_TIER2:-}"               # fallback assignee display name
 RAM_PER_AGENT="${LO_RAM_PER_AGENT:-2.5}"
@@ -39,12 +39,19 @@ WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re
 # Where the gate keeps its state files. Overridable so a test run of a new
 # gate never clobbers the live loop's watermark and hash.
 STATE_DIR="${LO_STATE_DIR:-$HOME/.claude/linear-orchestrator}"
-# Ticket statuses, by role. Todo is the machine's ball (ready, worked,
-# conflicting — all of it); In Progress is the human's; In review is
-# merged-awaiting-verification. Comments on any of the three are feedback.
+# Ticket statuses, by role. READY is the machine's ball (ready, worked,
+# conflicting — all of it); HUMAN is a person's; MERGED is merged-awaiting-
+# verification; DONE is verified. Comments on all four reach the loop — Done
+# included, because "merge, then note the follow-up the diff left out" is the
+# flow the whole system exists for. Canceled and backlog-type never do.
 READY_STATUS="${LO_READY_STATUS:-Todo}"
 HUMAN_STATUS="${LO_HUMAN_STATUS:-In Progress}"
 MERGED_STATUS="${LO_MERGED_STATUS:-In review}"
+DONE_STATUS="${LO_DONE_STATUS:-Done}"
+# Human comments older than this many days are never surfaced as feedback.
+# Pre-cutover tickets carry months of triage chatter with no 🌙 replies; the
+# floor keeps a ticket's whole history from reading as tonight's instructions.
+FEEDBACK_MAX_AGE_DAYS="${LO_FEEDBACK_MAX_AGE_DAYS:-14}"
 
 mkdir -p "$STATE_DIR"
 STATE="$STATE_DIR/gate-state"
@@ -52,6 +59,14 @@ QUEUE="$STATE_DIR/${PREFIX}-queue.json"
 WATERMARK="$STATE_DIR/${PREFIX}-watermark"
 PENDING="$STATE_DIR/${PREFIX}-pending.json"
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
+
+# The machine/human discriminator, as a jq regex. The convention is a visible
+# 🌙 at the start of the first line; comments written before the convention
+# (and GitHub-side bodies) may carry the HTML-comment form instead. Anchored
+# to line start on purpose: a human QUOTING a loop comment mid-sentence
+# ("your 🌙 review missed the null case") must still read as a human, or their
+# steering is silently classified as the machine and never answered.
+MOON='^(🌙|<!-- 🌙)'
 
 MODE=once
 NOREASON=""
@@ -167,9 +182,9 @@ probe() {
   # A broken gh is itself worth waking for — never wait quietly on it.
   [ -z "$prs" ] && { echo "GATE-ERROR: gh pr list failed"; return 0; }
 
-  verdicts=$(printf '%s' "$prs" | jq -c --arg pfx "$PREFIX" '[ .[] | {
+  verdicts=$(printf '%s' "$prs" | jq -c --arg pfx "$PREFIX" --arg moon "$MOON" '[ .[] | {
       pr: .number, draft: .isDraft, merge: .mergeable, head: .headRefName,
-      mine: ((.body // "") | test("🌙")),
+      mine: ((.body // "") | test("(?m)\($moon)")),
       ticket: (.headRefName | [match("\($pfx)-[0-9]+"; "ig").string] | (first // "") | ascii_upcase),
       ci: ( [ .statusCheckRollup[]? | select(.conclusion != null
                 and .conclusion != "SKIPPED" and .conclusion != "NEUTRAL") ] as $c
@@ -191,12 +206,14 @@ probe() {
 
   # --- the conversation: Linear, on a persisted watermark ---
   # One list_issues per probe answers "did anything move since the last probe".
-  # Only the moved tickets get their comments fetched, in parallel. Failure is
-  # a GATE-ERROR, not a note: a deaf gate now means unanswered humans, and the
-  # start-mode wrapper retries a persistent one.
-  moved='[]'
-  fresh_feedback='[]'
+  # Only the moved, in-scope tickets get their comments fetched, in parallel.
+  # Failure is a GATE-ERROR, not a note — a deaf gate now means unanswered
+  # humans — and NOTHING advances on failure: no watermark, no pending prune.
+  # Advancing state around a failed fetch is how one transient timeout would
+  # swallow a comment forever.
+  feedback=''
   linear_ok=yes
+  fetch_failed=no
   if [ -x "$AC" ] || command -v "$AC" >/dev/null 2>&1; then
     wm=$(cat "$WATERMARK" 2>/dev/null)
     [ -z "$wm" ] && wm=$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)
@@ -206,64 +223,98 @@ probe() {
     if [ -z "$mj" ]; then
       linear_ok=no
     else
-      # Only the statuses the loop answers for. Backlog-type is human
-      # territory and Done/Canceled are finished; comments there are not the
-      # loop's to answer.
-      moved=$(printf '%s' "$mj" | jq -c --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" --arg m "$MERGED_STATUS" '
-        [ .issues[]? | select(.status == $r or .status == $h or .status == $m)
-          | {id, status, updatedAt} ]')
-      new_wm=$(printf '%s' "$mj" | jq -r '[.issues[]?.updatedAt] | max // empty')
-
-      # Fetch comments for the moved tickets, in parallel, capped so a stale
-      # watermark cannot burst into fifty subprocesses.
-      moved_ids=$(printf '%s' "$moved" | jq -r '.[].id' | head -20)
-      if [ -n "$moved_ids" ]; then
+      # Everything that moved, oldest first — the order is what lets a capped
+      # probe advance the watermark only past what it actually fetched.
+      all_moved=$(printf '%s' "$mj" | jq -c '[ .issues[]? | {id, status, updatedAt} ] | sort_by(.updatedAt)')
+      # In scope: the four statuses the loop answers for. Out-of-scope moves
+      # still matter once: a pending entry whose ticket left scope (canceled,
+      # dragged to backlog) is pruned below, or it would wake the loop forever.
+      in_scope=$(printf '%s' "$all_moved" | jq -c --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" --arg m "$MERGED_STATUS" --arg d "$DONE_STATUS" '
+        [ .[] | select(.status == $r or .status == $h or .status == $m or .status == $d) ]')
+      out_of_scope=$(printf '%s' "$all_moved" | jq -c --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" --arg m "$MERGED_STATUS" --arg d "$DONE_STATUS" '
+        [ .[] | select(.status != $r and .status != $h and .status != $m and .status != $d) | .id ]')
+      # Fetch comments for the 20 OLDEST in-scope movers. Taking the oldest is
+      # load-bearing: the watermark then advances to the last FETCHED ticket,
+      # so under catch-up load (a day down, a bulk triage, the migration night
+      # itself) the rest still match "updated after watermark" on the next
+      # probe instead of being skipped forever.
+      fetch=$(printf '%s' "$in_scope" | jq -c '.[0:20]')
+      n_in_scope=$(printf '%s' "$in_scope" | jq 'length')
+      fetched_ids='[]'
+      fresh_feedback='[]'
+      fetch_ids=$(printf '%s' "$fetch" | jq -r '.[].id')
+      if [ -n "$fetch_ids" ]; then
         ctmp=$(mktemp -d)
-        for id in $moved_ids; do
+        for id in $fetch_ids; do
           "$AC" call linear list_comments --json "{\"issueId\":\"$id\",\"limit\":100}" --text \
             > "$ctmp/$id.json" 2>/dev/null &
         done
         wait
-        # A thread is unanswered when its newest human comment is newer than
-        # its newest 🌙 reply. Existence of a 🌙 reply is not enough — a human
-        # can reply again into an already-answered thread, and an existence
-        # test would swallow that silently. The author field cannot help (the
-        # MCP posts as the user), so 🌙-absence is the whole human test.
-        for id in $moved_ids; do
-          [ -s "$ctmp/$id.json" ] || { linear_ok=no; continue; }
-          fb=$(jq -c --arg t "$id" '
-            [ .comments[]? ] | group_by(.parentId // .id) | map(
-              ( [ .[] | select(.body | test("🌙") | not) ] | max_by(.createdAt) ) as $hum
-              | ( [ .[] | select(.body | test("🌙")) ] | max_by(.createdAt) ) as $moon
-              | select($hum != null)
-              | select($moon == null or $moon.createdAt < $hum.createdAt)
-              | { ticket: $t, thread: ($hum.parentId // $hum.id), comment: $hum.id,
-                  who: $hum.author.name, at: $hum.createdAt } )' "$ctmp/$id.json" 2>/dev/null)
+        floor=$(date -u -v-${FEEDBACK_MAX_AGE_DAYS}d +%Y-%m-%dT%H:%M:%SZ)
+        for id in $fetch_ids; do
+          if ! jq -e '.comments' "$ctmp/$id.json" >/dev/null 2>&1; then
+            fetch_failed=yes; continue
+          fi
+          fetched_ids=$(printf '%s' "$fetched_ids" | jq -c --arg t "$id" '. + [$t]')
+          st=$(printf '%s' "$fetch" | jq -r --arg t "$id" '.[] | select(.id == $t) | .status')
+          # A thread is unanswered when its newest human comment is newer than
+          # its newest 🌙 reply. Existence of a 🌙 reply is not enough — a
+          # human can reply again into an already-answered thread, and an
+          # existence test would swallow that silently.
+          #
+          # Ownership: on READY tickets every comment steers the machine —
+          # that is what the status means. On the human-side statuses the
+          # ticket is only the loop's if the loop has spoken on it (a 🌙
+          # comment exists — the pickup note, the review, the promotion
+          # comment guarantee one on every worked ticket). Without that test,
+          # two teammates discussing their own In Progress ticket would wake
+          # the loop into a conversation that is none of its business.
+          fb=$(jq -c --arg t "$id" --arg st "$st" --arg r "$READY_STATUS" --arg floor "$floor" --arg moon "$MOON" '
+            def ismoon: ((.body // "") | split("\n")[0] | test($moon));
+            ([ .comments[]? | select(ismoon) ] | length > 0) as $loopspoke
+            | if ($st != $r) and ($loopspoke | not) then [] else
+              ( [ .comments[]? ] | group_by(.parentId // .id) | map(
+                ( [ .[] | select(ismoon | not) ] | max_by(.createdAt) ) as $hum
+                | ( [ .[] | select(ismoon) ] | max_by(.createdAt) ) as $mn
+                | select($hum != null)
+                | select($hum.createdAt > $floor)
+                | select($mn == null or $mn.createdAt < $hum.createdAt)
+                | { ticket: $t, thread: ($hum.parentId // $hum.id), comment: $hum.id,
+                    who: $hum.author.name, at: $hum.createdAt } ) )
+              end' "$ctmp/$id.json" 2>/dev/null)
           [ -n "$fb" ] && fresh_feedback=$(printf '%s\n%s' "$fresh_feedback" "$fb" | jq -cs 'add')
         done
         rm -rf "$ctmp"
       fi
 
-      # Pending survives the watermark. An unanswered thread stays in the file
-      # until a later fetch of that ticket shows it answered — which happens
-      # naturally, because the ack bumps the ticket's updatedAt. So the
-      # watermark can advance every probe without losing feedback, and a
-      # /clear, restart or compaction loses nothing.
-      prev_pending=$(cat "$PENDING" 2>/dev/null); [ -z "$prev_pending" ] && prev_pending='[]'
-      moved_set=$(printf '%s' "$moved" | jq -c '[.[].id]')
-      feedback=$(jq -cn --argjson prev "$prev_pending" --argjson fresh "$fresh_feedback" --argjson m "$moved_set" '
-        ([ $prev[] | select(.ticket as $t | $m | index($t) | not) ] + $fresh) | unique_by(.comment)')
-      printf '%s' "$feedback" > "$PENDING"
-      # The watermark is the max updatedAt actually seen, so nothing between
-      # two probes can fall through; a same-instant edge at worst refetches
-      # one ticket, and the fetch is idempotent.
-      [ -n "$new_wm" ] && printf '%s' "$new_wm" > "$WATERMARK"
+      if [ "$fetch_failed" = no ]; then
+        # Pending survives the watermark. An unanswered thread stays in the
+        # file until a later fetch of that ticket shows it answered — which
+        # happens naturally, because the ack bumps the ticket's updatedAt.
+        # Prune only what this probe actually learned about: the tickets it
+        # fetched (recomputed fresh) and the tickets it saw leave scope.
+        prev_pending=$(cat "$PENDING" 2>/dev/null); [ -z "$prev_pending" ] && prev_pending='[]'
+        feedback=$(jq -cn --argjson prev "$prev_pending" --argjson fresh "$fresh_feedback" \
+                          --argjson f "$fetched_ids" --argjson gone "$out_of_scope" '
+          ([ $prev[] | select(.ticket as $t | ($f | index($t)) or ($gone | index($t)) | not) ] + $fresh)
+          | unique_by(.comment)')
+        printf '%s' "$feedback" > "$PENDING"
+        # Watermark: past everything seen when nothing was capped; only past
+        # the last fetched ticket when the probe hit the fetch cap.
+        if [ "$n_in_scope" -gt 20 ]; then
+          new_wm=$(printf '%s' "$fetch" | jq -r 'last.updatedAt // empty')
+          notes="$notes${notes:+; }linear catch-up: $n_in_scope moved, fetched 20 oldest"
+        else
+          new_wm=$(printf '%s' "$all_moved" | jq -r 'last.updatedAt // empty')
+        fi
+        [ -n "$new_wm" ] && printf '%s' "$new_wm" > "$WATERMARK"
+      fi
     fi
   else
     linear_ok=no
   fi
-  if [ "$linear_ok" = no ]; then
-    echo "GATE-ERROR: linear unreachable (token expired? claude mcp login linear); feedback not read"
+  if [ "$linear_ok" = no ] || [ "$fetch_failed" = yes ]; then
+    echo "GATE-ERROR: linear unreachable or a comment fetch failed (token expired? claude mcp login linear); state NOT advanced"
     return 0
   fi
   [ -z "$feedback" ] && feedback=$(cat "$PENDING" 2>/dev/null); [ -z "$feedback" ] && feedback='[]'
@@ -272,8 +323,10 @@ probe() {
   # --- status drift: the draft bit and the ticket status are one fact ---
   # isDraft ⇔ READY_STATUS, promoted ⇔ HUMAN_STATUS, for every ticket the loop
   # owns. The gate only sees drift on tickets that moved this probe (that is
-  # what changed the world); the tick reconciles the rest when it is awake.
-  drift=$(jq -cn --argjson v "$verdicts" --argjson m "$moved" --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" '
+  # what changed the world); the tick decides what each direction MEANS — a
+  # human dragging a promoted ticket back to READY is a rework order, not an
+  # error to repair — see SKILL.md 2b.
+  drift=$(jq -cn --argjson v "$verdicts" --argjson m "${in_scope:-[]}" --arg r "$READY_STATUS" --arg h "$HUMAN_STATUS" '
     [ $m[] | . as $t | ($v[] | select(.mine and .ticket == ($t.id | ascii_upcase))) as $pr
       | ( if $pr.draft and $t.status == $h then {ticket: $t.id, pr: $pr.pr, is: $t.status, should: $r}
           elif ($pr.draft | not) and $t.status == $r then {ticket: $t.id, pr: $pr.pr, is: $t.status, should: $h}
@@ -293,10 +346,10 @@ probe() {
       --json "{\"team\":\"$TEAM\",\"state\":\"$READY_STATUS\",\"includeArchived\":false,\"fields\":[\"assignee\",\"archivedAt\",\"status\"]}" \
       --text 2>/dev/null)
     if [ -n "$tj" ]; then
-      todo_ids=$(printf '%s' "$tj" | jq -r --arg t1 "$TIER1" --arg t2 "$TIER2" --argjson held "$inhand_tickets" '
+      todo_ids=$(printf '%s' "$tj" | jq -r --arg t1 "$TIER1" --arg t2 "$TIER2" --arg r "$READY_STATUS" --argjson held "$inhand_tickets" '
         [ .issues[]?
           | select(.archivedAt == null)
-          | select(.status == "'"$READY_STATUS"'")
+          | select(.status == $r)
           | select(.assignee == null or .assignee == "" or .assignee == $t1 or .assignee == $t2)
           | select(.id as $i | $held | index($i) | not)
           | .id ] | sort | join(",")' 2>/dev/null)

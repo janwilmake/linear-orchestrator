@@ -75,6 +75,8 @@ and every tick read it:
 | `LO_READY_STATUS`     | `READY_STATUS`      | the machine's status (default `Todo`)      |
 | `LO_HUMAN_STATUS`     | `HUMAN_STATUS`      | the human's status (default `In Progress`) |
 | `LO_MERGED_STATUS`    | `MERGED_STATUS`     | the merged status (default `In review`)    |
+| `LO_MERGE_AUTHORS`    | `MERGE_AUTHORS`     | comma-separated Linear display names whose "merge" comment is executed; **defaults to `ASSIGNEE_TIER_1` alone** |
+| `LO_FEEDBACK_MAX_AGE_DAYS` | —              | human comments older than this never surface as feedback (default `14`) |
 | `LO_STATE_DIR`        | —                   | gate state dir override, for testing a gate without touching the live one |
 
 Fixed, no config: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE`
@@ -294,17 +296,24 @@ word `merge`** and contains nothing beyond a short tail ("merge", "merge it",
 "merge pls") is a human ordering the merge. A comment that merely *mentions*
 merging mid-sentence is ordinary feedback, never a command. For a merge order:
 
-1. Re-check the guards via `get_diff(<PR url>)` and the gate's block: the PR is
+1. **The author must be in `MERGE_AUTHORS`** — the gate's `FEEDBACK` entry
+   carries `who`, and only the listed Linear display names may order a merge.
+   Anyone else's "merge" is ordinary feedback: reply 🌙 that merging is
+   reserved to the listed people and name them, and execute nothing. This is
+   the one place authorship gates an action — a comment can steer work at any
+   author's word, but a merge lands on the base branch, and the old system
+   could not merge at all.
+2. Re-check the state via `get_diff(<PR url>)` and the gate's block: the PR is
    promoted (ticket in `HUMAN_STATUS`), `mergeStatus` is ready, CI green on the
    head commit.
-2. All green → `merge_diff(<PR url>)`, then a 🌙 thread reply with the result.
+3. All green → `merge_diff(<PR url>)`, then a 🌙 thread reply with the result.
    Linear's git automation moves the ticket to `MERGED_STATUS`; do not move it
    yourself.
-3. Any guard fails → **no merge**, and the 🌙 thread reply says exactly which
-   guard and what would clear it.
+4. Any check fails → **no merge**, and the 🌙 thread reply says exactly which
+   one and what would clear it.
 
 The invariant survives rephrased: the loop never *decides* to merge; it may
-*execute* an explicit human merge order.
+*execute* an explicit merge order from a listed human.
 
 **Otherwise route on the ticket's PR state** (the gate's verdicts carry it):
 
@@ -351,10 +360,12 @@ which one you read.
 
 **A comment is not always a person typing.** Other automated loops on this
 machine write to the same tickets — the screenless loop relays what a caller
-decided on a call, and it opens the tickets for that call itself. Its comments
-carry no 🌙, so the gate hands them over as human feedback, which is right: the
-caller *is* speaking. What is wrong is answering that comment by opening a
-ticket the other loop opened one minute earlier.
+decided on a call, and it opens the tickets for that call itself. (Until that
+loop's own update lands, its relay still posts to GitHub PRs, which this loop
+no longer reads — cut over both together, or a call's decisions go nowhere.)
+Its comments carry no 🌙, so the gate hands them over as human feedback, which
+is right: the caller *is* speaking. What is wrong is answering that comment by
+opening a ticket the other loop opened one minute earlier.
 
 So, before creating any ticket out of a comment:
 
@@ -373,14 +384,30 @@ So, before creating any ticket out of a comment:
 
 **The draft bit and the ticket status are one fact written twice**, and every
 merge into `BASE_BRANCH`, every human drag and every automation firing can
-split them. This step repairs both directions, and it is cheap enough to run on
-every tick.
+split them. This step reconciles them — but **the two directions mean opposite
+things**, because the status is the surface a human touches. Never blindly set
+the status back to what the PR says: one of the two directions is a person
+steering.
 
-**Drift first.** For each `DRIFT` entry — a loop-owned ticket whose status
-disagrees with its PR's draft bit — one `save_issue` sets the status the PR
-says. No comment needed for a bare repair; the PR is the story. (Drift usually
-means a human dragged the ticket or an automation fired; the PR side is the
-loop's own act and wins.)
+For each `DRIFT` entry:
+
+- **Promoted PR + ticket in `READY_STATUS`** — a human dragged it back. That
+  is a rework order, the drag-and-drop successor to the old `invalid` label,
+  and it needs no words to count. Re-draft the PR (`gh pr ready --undo`),
+  reply 🌙 on the ticket — "read as: rework wanted; say in a comment what to
+  change, or drag it back to `HUMAN_STATUS` to undo" — and record the draft in
+  `WORK_CACHE` as `awaiting-steer`. **2c must not re-promote an
+  `awaiting-steer` draft** (its five gates still pass — that is how it got
+  promoted the first time); the state clears when a human comment arrives
+  (2a dispatches the rework) or the human drags the ticket forward again.
+- **Draft PR + ticket in `HUMAN_STATUS`** — either an automation fired (fix
+  the automation: draft-open and review-activity transitions must be
+  No action), or a human pulled the ticket to themselves. Set it back to
+  `READY_STATUS` **once**, with a 🌙 comment saying why and that dragging it
+  to `HUMAN_STATUS` again will be read as "you are taking this over". If the
+  same ticket drifts this direction a second time, believe the human: leave
+  the status, mark the draft `human-held` in `WORK_CACHE`, and stop working
+  it until they hand it back.
 
 **Then REGATE.** For each PR it names:
 
@@ -491,6 +518,8 @@ promote on the spot if it is there — before classifying anything else:
   Test the whole description, not a heading — the screenshots live beside the
   sentences they prove, in Problem and Solution, so there is no gallery heading
   to key on, and there never should be.
+- **awaiting-steer / human-held** — marked so by 2b. Not promotable, not
+  workable; a human comment or drag clears it. Skip.
 - **ready** — none of the above. Take it out of draft with `gh pr ready <PR#>`,
   **move the ticket to `HUMAN_STATUS`**, **assign it to `ASSIGNEE_TIER_1`** —
   this is the moment a human first owes it a look, and an unowned In Progress
@@ -666,8 +695,9 @@ back in `READY_STATUS`, and without the ticket marker the next rebuild would
 hand it out again):
 
 ```bash
-echo "<slot>" > ~/.claude/linear-orchestrator/dispatched/<TICKET-ID>
-echo "<slot>" > ~/.claude/linear-orchestrator/dispatched/<PR#>     # when a PR exists
+# <state dir> is LO_STATE_DIR, default ~/.claude/linear-orchestrator
+echo "<slot>" > <state dir>/dispatched/<TICKET-ID>
+echo "<slot>" > <state dir>/dispatched/<PR#>     # when a PR exists
 ```
 
 `cca` prints the slot it took (`agent-1 -> /Users/admin/.claude/agents/agent-1`),

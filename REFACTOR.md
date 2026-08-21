@@ -399,7 +399,45 @@ The migrated ticket content is additive and loses nothing either way.
 
 1. **PR 1 — docs + gate**: SKILL.md rewrite, gate.sh rewrite, `.env.example`.
    Reviewable as one diff because the two files are one design.
-2. **Migration run** (§8) — a one-night operation, not a commit.
-3. **PR 2 — screenless**: the ☎️ relay + status semantics in its skill.
+2. **PR 2 — screenless**: the ☎️ relay moves to ticket comments + the status
+   semantics in its skill. **Must land before or with the cutover**, not
+   after: the new gate never reads GitHub comments, so a night with the old
+   relay silently drops every call decision — a regression from today.
+3. **Migration run** (§8) — a one-night operation, not a commit. Cutover =
+   `git pull` in the live skill checkout at the start of this night (mind the
+   untracked local `REFACTOR.md`: move it aside first), plus the two
+   automation flips (§8.7).
 4. First supervised night on the new system; TROUBLESHOOTING.md gains whatever
    that night teaches.
+
+## 10. Review findings, applied
+
+PR 1 was adversarially reviewed (10 confirmed findings); all are fixed in the
+branch. The ones that changed the design, not just the code:
+
+- **Merge authorization**: `MERGE_AUTHORS` (default: tier-1 assignee alone)
+  gates the "merge" command — the review caught that deleting
+  `FEEDBACK_LOGINS` while adding a merge command let anyone with comment
+  rights merge to the base branch.
+- **Failure freezes state**: a failed or partial comment fetch advances
+  nothing — no watermark, no pending prune — and exits `GATE-ERROR`. One
+  transient timeout can no longer swallow a comment forever.
+- **Catch-up correctness**: the per-probe fetch cap takes the 20 *oldest*
+  movers and advances the watermark only past what was actually fetched, so a
+  bulk triage or a day of downtime is drained over several probes instead of
+  skipped.
+- **Ownership filter**: on human-side statuses, only tickets the loop has
+  spoken on (a 🌙 comment exists) surface feedback — teammates' own threads
+  are not the loop's business. `Todo` tickets surface everything, which is
+  what the status means.
+- **Scope-exit prune + age floor**: pending entries whose ticket leaves the
+  watched statuses are pruned (no immortal wake-storms), and human comments
+  older than `LO_FEEDBACK_MAX_AGE_DAYS` (14) never surface — a ticket's
+  pre-orchestrator history cannot read as tonight's instructions. `Done` is
+  watched, so the merged-then-noted follow-up flow works.
+- **Drift is directional**: promoted-PR-dragged-to-Todo is a rework order
+  (the invalid label's successor — re-draft, ack, `awaiting-steer`), not an
+  error to revert; draft-ticket-dragged-to-In-Progress is repaired once, then
+  believed as a human takeover.
+- **Anchored markers**: 🌙 is matched at line start (`(?m)^🌙`, legacy
+  `<!-- 🌙` accepted), so a human quoting a loop comment reads as a human.

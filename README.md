@@ -49,8 +49,9 @@ model, so "no blockers left" is evidence about care, not proof of correctness.
 The loop stops at a reviewed, non-draft PR and leaves the decision to a person —
 who can review and merge without leaving Linear (the ticket links the review
 page), or just comment **"merge"** on the ticket and let the loop execute it
-after re-checking that the PR is still mergeable and green. The human decides;
-the loop only ever executes.
+after re-checking that the PR is still mergeable and green. Only the people
+named in `LO_MERGE_AUTHORS` are obeyed — anyone else's "merge" gets an answer,
+not a merge. The human decides; the loop only ever executes.
 
 ## What it does, in order
 
