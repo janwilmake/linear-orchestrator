@@ -9,13 +9,23 @@ overnight and hands you a morning of pull requests to read.
 
 ## What makes it different
 
-**The whole interface is two surfaces.** A ticket in Linear, and a comment on a
-pull request. There is no chat window to steer, no label to remember, no plan to
-approve inside the tracker. To change the direction of the work you comment on the
-PR, and the loop reads it, answers it by name, and acts on it. That works on a
-**merged** PR too, which is where it earns its keep: merge, note the follow-up work
-the PR spotted but left out of scope, and the loop turns your note into the next
-ticket by itself. Teammates can steer it the same way, on purpose.
+**The whole interface is one surface: the ticket.** Anyone writes a ticket in
+their own words; the loop grooms it (your words kept verbatim, a grounded
+rewrite beside them), works it, and everything a PR body used to hold — the
+problem, the solution, the decisions, the screenshots, the review — lands on
+the ticket. The PR body is two lines and a link. To steer the work you comment
+on the ticket — from the app, from your phone — and the loop answers in the
+thread and acts on it. That works on a **merged** ticket too, which is where it
+earns its keep: merge, note the follow-up work the diff spotted but left out of
+scope, and the loop turns your note into the next ticket by itself. GitHub
+comments are deliberately not read at all.
+
+**The status is one bit: whose ball is it.** Default Linear statuses only —
+`Todo` means the machine holds it (ready, being written, being reviewed, even
+conflicting), `In Progress` means a person owes it a look (a promoted PR, a
+blocker, a research decision), and Linear's own git automation moves it on
+merge. Nothing in the backlog is ever touched: moving a ticket to `Todo` is the
+start signal, and the only one.
 
 **Draft means something.** A PR leaves draft only on evidence — a review, a fix
 pass over that review, a screenshot when a user can see the change, no merge
@@ -34,29 +44,35 @@ uses whatever the machine has: it measures free memory every probe and runs as m
 agents as will really fit — one per `LO_RAM_PER_AGENT` gigabytes — so parallelism
 is bounded by your laptop rather than by a plan.
 
-**It never merges.** Author and reviewer are the same model, so "no blockers left"
-is evidence about care, not proof of correctness. The loop stops at a reviewed,
-non-draft PR and leaves the merge to a person. That is a choice, not a missing
-feature.
+**It never merges on its own judgment.** Author and reviewer are the same
+model, so "no blockers left" is evidence about care, not proof of correctness.
+The loop stops at a reviewed, non-draft PR and leaves the decision to a person —
+who can review and merge without leaving Linear (the ticket links the review
+page), or just comment **"merge"** on the ticket and let the loop execute it
+after re-checking that the PR is still mergeable and green. The human decides;
+the loop only ever executes.
 
 ## What it does, in order
 
-1. **The gate blocks until there is work** — capacity, your PRs, the Linear ready
-   column.
-2. **An agent takes the ticket**, moves it to In Progress, branches, opens the
-   draft PR before it writes any code, writes the code, tests it in a real browser,
-   and stops.
+1. **The gate blocks until there is work** — capacity, your PRs, unanswered
+   ticket comments, the Linear ready column.
+2. **An agent takes the ticket**, grooms it (your words verbatim, a grounded
+   rewrite), branches, opens the two-line draft PR before it writes any code,
+   writes the code, tests it in a real browser, and keeps the ticket current as
+   it goes. The ticket stays in `Todo` the whole time — the machine's ball.
 3. **A second agent reviews that PR in a fresh context** — it has the diff, the
-   ticket and your repo's agent guide, and none of the reasoning the author talked
-   itself into. It posts the review as one comment, makes exactly one fix pass over
-   what it found, and corrects the PR body where the diff moved past it.
-4. **The PR leaves draft on the five gates**, or stays a draft.
-5. **Your comment re-opens any of it.** An unanswered comment on one of its PRs
-   outranks every other kind of work on the next tick.
+   ticket and your repo's agent guide, and none of the reasoning the author
+   talked itself into. It posts the review as one comment on the ticket, makes
+   exactly one fix pass over what it found, and corrects the ticket where the
+   diff moved past it.
+4. **The PR leaves draft on the five gates**, or stays a draft. Promotion moves
+   the ticket to `In Progress` — now it is your ball, and the ticket says so.
+5. **Your comment re-opens any of it.** An unanswered comment on one of its
+   tickets outranks every other kind of work on the next tick.
 
 Every agent gets its own repo clone, Terminal window and **real Chrome**, which is
-why front-end tickets work here: the screenshots on the PR come from driving the
-actual screen, not from a headless guess.
+why front-end tickets work here: the screenshots on the ticket come from driving
+the actual screen, not from a headless guess.
 
 The mechanics — the shell gate, and how the loop tells your comments from its own —
 are in [`HOW-IT-WORKS.md`](./HOW-IT-WORKS.md).
@@ -121,8 +137,14 @@ LO_TIER1="Preferred Assignee"  # display name; unassigned is always eligible
 LO_TIER2="Fallback Assignee"   # display name
 LO_RAM_PER_AGENT="2.5"         # GB per agent (claude + vite + chrome)
 LO_MAX_AGENTS="4"              # hard ceiling on concurrent agents
-LO_FEEDBACK_SINCE="2026-08-18T17:00:00Z"   # the day you installed this
 ```
+
+The status names (`Todo` / `In Progress` / `In review`) are overridable too —
+see `.env.example`. One piece of Linear setup is required: in your team's
+**Workflows & automations**, set *draft PR open* and *PR review activity* to
+**No action**, and *PR or commit merge* to your `In review` status. The first
+two would fight the status contract; the third is the merged-ticket move done
+natively.
 
 `LO_RAM_PER_AGENT` is the one people get wrong: it is a divisor, not a threshold.
 Every tick spawns `free memory / LO_RAM_PER_AGENT` agents. The default assumes one

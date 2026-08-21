@@ -8,20 +8,26 @@ it — read this when a run looks wrong, or when you want to change it.
 ```
 $ /linear-orchestrator
 waiting for work - probe every 60s, give up after 40m
-17:22Z NO - slots=1, nothing to take; no drafts; linear ready column empty
+17:22Z NO - slots=1, nothing to take; no drafts; ready column empty
 17:41Z NO - no slot: ram 2.2gb free, 2.5gb per agent, busy=1; 1 draft(s) waiting
 load1=1.80 freegb=2.5 diskgb=855 busy=0 slots=1
-FEEDBACK: [{"pr":768,"id":5327779919,"who":"a-teammate","state":"MERGED"}]
+FEEDBACK: [{"ticket":"ENG-431","thread":"70c2…","comment":"70c2…","who":"a-teammate","at":"…"}]
 DRAFTS: [772]
 --- woke after 26m ---
 ```
 
 `gate.sh` answers "is there anything to do?" in one shot and prints either a `NO`
 line **with its reason** or a compact context block. It covers capacity, reaps
-leaked dev servers, re-checks the PRs it already promoted, finds comments nobody
-has answered, and — the part that used to be impossible from a shell — **reads the
-Linear ready column directly**, through the
+leaked dev servers, re-checks the PRs it already promoted, keeps the ticket
+status and the PR draft bit telling one story, and — the part that used to be
+impossible from a shell — **reads Linear directly**, through the
 [`agent-codemode`](https://github.com/janwilmake/agent-codemode) CLI.
+
+The Linear read is a watermark poll: one `list_issues` call per probe asks
+"what moved since the last probe", and only the moved tickets get their
+comments fetched, in parallel. A quiet probe costs one subprocess and under a
+second; unanswered threads survive in a pending file on disk, so a restart or a
+`/clear` forgets nothing.
 
 `agent-codemode` inherits Claude Code's [Linear MCP](https://linear.app/docs/mcp)
 OAuth from the Keychain, so the gate queries Linear with **no token, no model and
@@ -33,23 +39,27 @@ of one every five minutes.
 
 ## How it tells your comments from its own
 
-Every agent posts through your own `gh`, so every comment on every PR carries
-**your** GitHub login. The author field can never separate a person from a
-machine. So the loop marks its own instead:
+Every agent posts through your own Linear login (the MCP posts as you), so the
+author field can never separate a person from a machine. So the loop marks its
+own instead:
 
-- Every comment the loop or one of its agents writes starts with `<!-- 🌙 -->`.
-- An unmarked comment on a PR the loop opened is a person talking to it.
-- Its reply names the comment it answers — `<!-- 🌙 ack:<comment-id> -->` — so
-  "already handled" is a fact recorded on GitHub, not in a cache that a `/clear`
-  can lose. Nothing is answered twice, and nothing is answered never.
+- Every comment the loop or one of its agents writes starts with a visible `🌙`.
+  (Not an HTML comment — Linear renders `<!-- -->` as literal text.)
+- An unmarked comment on a ticket the loop owns is a person talking to it.
+- Its answer is a **reply in your comment's thread**, so "already handled" is
+  structural: a thread is answered when its newest human comment is older than
+  its newest 🌙 reply. Reply again and the loop wakes again. Nothing is
+  answered twice, and nothing is answered never — and the record lives in
+  Linear, not in a cache a `/clear` can lose.
 - Every comment gets an answer, including the ones that need no work. Silence is
   the one wrong reply.
-- The loop's own comments are collapsed into `<details>`. A person's are not, and
-  neither is anything a person must act on.
-
-Set `LO_FEEDBACK_SINCE` to the day you install this. Comments older than it were
-written before marking began, so they carry no marker and would all read as
-instructions.
+- The loop's long content collapses into Linear's `>>>` toggles. A person's
+  comments do not, and neither does anything a person must act on — a
+  `## Blocked on` line, a promotion notice's opening line, an answer.
+- One word is a command: a comment that just says **"merge"** on an In Progress
+  ticket makes the loop re-check the PR (promoted, mergeable, CI green) and
+  merge it, replying with the result. Everything else steers; only that
+  executes.
 
 ## When a run looks wrong
 
