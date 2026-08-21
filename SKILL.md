@@ -37,6 +37,7 @@ and every tick read it:
 | `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
 | `LO_MAX_AGENTS`       | `MAX_AGENTS_CAP`    | hard ceiling on concurrent agents (default `4`) |
 | `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | the day the loop began marking its own comments; nothing older is read as feedback |
+| `LO_FEEDBACK_LOGINS`  | `FEEDBACK_LOGINS`   | comma-separated GitHub logins whose comments steer the loop; empty means every non-bot login |
 
 Fixed, no config: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE`
 your repo's guide (`CLAUDE.md`) · `READY_STATUS` `Todo` then `Backlog` ·
@@ -267,9 +268,16 @@ the only thing the person sees. Without it they cannot tell the difference betwe
 "read and considered" and "never noticed", so a silent no-op is the one wrong
 answer. "Noted, nothing to do, and here is why" is a complete one.
 
-**Teammates count.** The scan is not limited to the user — anyone who can read the
-PR can steer the loop. It *is* limited to PRs the loop opened, so two people
-reviewing each other's own PR never wakes it.
+**Who counts.** The scan is limited to PRs the loop opened, so two people
+reviewing each other's own PR never wakes it. `FEEDBACK_LOGINS` limits it again,
+by author: only those GitHub logins steer the loop, and every other comment is
+ignored. Leave it empty and any teammate who can read the PR can steer — a
+feature on a small team, and a problem on a repo where outsiders comment.
+
+The gate drops the ignored comments before it does anything else, so they never
+reach the `FEEDBACK` line and never get an ack. That is the trade: a person
+outside the list gets no answer at all. Say so to the user if they ask why a
+comment went unanswered.
 
 Take the entries oldest comment first. Read the comment
 (`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body`), then route it on

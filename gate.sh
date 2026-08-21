@@ -37,6 +37,9 @@ WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re
 # they would all read as human. This floor is the day marking began: nothing
 # before it is ever treated as feedback.
 FEEDBACK_SINCE="${LO_FEEDBACK_SINCE:-2026-08-18T17:00:00Z}"
+# Whose comments count as feedback. Comma-separated GitHub logins, case
+# insensitive. Empty means every non-bot login counts.
+FEEDBACK_LOGINS="${LO_FEEDBACK_LOGINS:-}"
 
 STATE=~/.claude/linear-orchestrator/gate-state
 QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
@@ -187,10 +190,13 @@ probe() {
   # question the user asked while that agent was working.
   #
   # The scan is repo-wide (PRs are issues, so one endpoint covers both), which is
-  # what catches a comment on an already-merged PR. It is deliberately NOT
-  # limited to the user: a teammate steering the loop is a feature. It IS limited
-  # to PRs the loop opened, because ordinary review chatter between two people on
-  # their own PR is not an instruction to a machine.
+  # what catches a comment on an already-merged PR. It IS limited to PRs the loop
+  # opened, because ordinary review chatter between two people on their own PR is
+  # not an instruction to a machine.
+  #
+  # FEEDBACK_LOGINS narrows it further: only those logins steer the loop. Set it
+  # when the repo has people who comment but must not dispatch work. Leave it
+  # empty and every non-bot login counts.
   since="$FEEDBACK_SINCE"
   win=$(date -u -v-14d +%Y-%m-%dT%H:%M:%SZ)
   # ISO-8601 sorts lexically, so the later of the two is just the bigger string.
@@ -201,8 +207,12 @@ probe() {
   [ -z "$cmts" ] && cmts='[]'
   acked=$(printf '%s' "$cmts" | jq -c '[ .[] | select(.body | test("🌙"))
             | .body | [ scan("ack:([0-9]+)") ] ] | flatten | map(tonumber)')
-  pending=$(printf '%s' "$cmts" | jq -c --argjson acked "$acked" '[ .[]
+  pending=$(printf '%s' "$cmts" | jq -c --argjson acked "$acked" --arg allow "$FEEDBACK_LOGINS" '
+            ($allow | ascii_downcase | split(",") | map(sub("^ +";"") | sub(" +$";""))
+              | map(select(length > 0))) as $who
+            | [ .[]
             | select((.body | test("🌙")) | not)
+            | select(($who | length) == 0 or ((.who | ascii_downcase) as $w | $who | index($w) != null))
             | .id as $i | select($acked | index($i) | not) ]')
 
   feedback='[]'
@@ -242,6 +252,20 @@ probe() {
       fi
     else
       notes="$notes${notes:+; }agent-codemode CLI not found; Linear check skipped"
+    fi
+    # Subtract the ids the model has already judged un-runnable. They live in
+    # QUEUE's `skipped` list, written by the last rebuild. Without this a ticket
+    # the loop will never take stays in todo_ids forever, and the rule below
+    # ("ids present AND the world hash moved") then fires on every commit, CI
+    # transition and PR comment that the running agents produce — a wake every
+    # couple of minutes with nothing to do. Seen on a real run with HYR2-972.
+    if [ -n "$todo_ids" ] && [ -f "$QUEUE" ]; then
+      skipped=$(jq -r '[.skipped[]?.id] | join(",")' "$QUEUE" 2>/dev/null)
+      if [ -n "$skipped" ]; then
+        todo_ids=$(printf '%s' "$todo_ids" | tr ',' '\n' \
+          | grep -vxF -f <(printf '%s' "$skipped" | tr ',' '\n') \
+          | paste -sd, - )
+      fi
     fi
   fi
 
