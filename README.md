@@ -1,15 +1,15 @@
-# GitHub Orchestrator
+# Linear Orchestrator
 
 **Tickets in. Reviewed pull requests out. Nobody watching.**
 
 A [Claude Code](https://claude.com/claude-code) skill that runs your Linear board
 overnight and hands you a morning of pull requests to read.
 
-> **Superseded by [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator).**
-> This repo is the first generation of the loop, where the conversation lives on
-> the pull request — the PR carries the full body and the review, and you steer
-> by commenting on GitHub. The successor moves all of that into the Linear
-> ticket. This generation still works and stays as-is.
+> There is an experimental second generation,
+> [linear-orchestrator2](https://github.com/janwilmake/linear-orchestrator2),
+> which moves the whole conversation — body, screenshots, review, steering —
+> into the Linear ticket. This repo is the maintained generation: the
+> conversation lives on the pull request, and you steer by commenting there.
 
 ![How it works: you write a ticket, the gate waits for free memory, agents write the code, a fresh agent reviews it, and you get a PR to read](./hero.svg)
 
