@@ -13,7 +13,7 @@ overnight and hands you a morning of pull requests to read.
 
 ![How it works: you write a ticket, the gate waits for free memory, agents write the code, a fresh agent reviews it, and you get a PR to read](./hero.svg)
 
-![Five steps, click by click: a ticket in Todo, an agent writes the code and a full draft PR body, a second agent reviews cold and fixes, draft leaves on evidence, and your PR comment becomes tomorrow's ticket](./demo.gif)
+![The nightly factory: a ticket flows in from Linear, through the gate, a coding agent that opens a full-bodied draft PR, and a fresh reviewing agent, and a reviewed ready PR flows out to GitHub — where the conversation lives, and your comment becomes tomorrow's ticket](./demo.gif)
 
 ## What makes it different
 
