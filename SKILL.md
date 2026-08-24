@@ -163,12 +163,31 @@ the board. Repeat that line to the user rather than reporting "no work".
 **On a `NO` line, end the tick here** — that is most ticks, and it costs one
 line. Report the reason the gate gave, not a bare "nothing to do".
 
-**If the waiter woke this tick, its block is already in the transcript** — read
-it, do not run `gate.sh` again. The numbers would only be seconds newer, and a
-second run overwrites the state hash the first one just set. Two lines tell you
-which case you are in: `--- woke after 21m ---` is real work, and
-`--- still nothing after 40m, re-arm ---` is the bounded wait giving up. On the
-second one, arm the next waiter and end the tick.
+**If the waiter woke this tick, read its block** — do not run `gate.sh` again.
+The numbers would only be seconds newer, and a second run overwrites the state
+hash the first one just set. Two lines tell you which case you are in:
+`--- woke after 21m ---` is real work, and `--- still nothing after 40m, re-arm ---`
+is the bounded wait giving up. On the second one, arm the next waiter and end the
+tick.
+
+**Read that block from the waiter's output file, by path, every time.** The
+harness announces the exit as a task notification carrying that path, and the
+notification is not the block — it names the file and says nothing about what is
+in it. Open it before doing anything else.
+
+Assuming the block is already in front of you is how a wake gets dropped. The
+notification can arrive mid-turn, while something else has your attention: the
+user asks a question, another loop's waiter exits, an agent finishes. Answer that
+instead and the block is never opened, so a `REGATE` line naming four promoted
+PRs that can no longer merge reads, from the outside, exactly like a quiet night.
+
+Seen on a real run: the waiter woke at 12:03 with four conflicted, still-promoted
+PRs in one `REGATE` line — the sweep working exactly as designed. The
+notification landed mid-turn, the file was never opened, and the four sat
+promoted and unmergeable until the user noticed them by hand. The gate was right
+and the tick that ignored it was wrong, which is the failure this paragraph
+exists to prevent. **A waiter that exits has always produced something worth
+reading — that is the only reason it exits.**
 
 **Every tick ends by arming the next waiter** — see step 5. `--wait` exits on
 work only. A hash that changed with nothing actionable behind it keeps the
