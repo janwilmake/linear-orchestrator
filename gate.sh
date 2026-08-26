@@ -4,6 +4,12 @@
 #
 # Two modes:
 #   gate.sh            one probe, print, exit — for a fixed-interval loop.
+#   gate.sh --peek     the same probe, but never writes the state file — for a
+#                      heartbeat tick that only wants to LOOK while a --wait
+#                      waiter is alive. A plain run rewrites the hash the waiter
+#                      compares against, so the waiter's next probe sees no
+#                      change and the "world-changed: yes" it owed the model is
+#                      swallowed. Use --peek whenever a waiter is running.
 #   gate.sh --wait [s] block until there IS work, then print and exit — for an
 #                      event-driven loop. Run it with run_in_background: the
 #                      exit is what wakes the model, so a quiet night costs no
@@ -46,6 +52,12 @@ QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
 MODE=once
+PEEK=0
+[ "$1" = "--peek" ] && PEEK=1
+
+# Every state write goes through here. --peek makes it a no-op, so a look never
+# moves the world forward for the waiter that is watching it.
+save_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$STATE"; }
 NOREASON=""
 
 # probe: measure the world once. Prints the context block and returns 0 when
@@ -385,12 +397,12 @@ probe() {
     # was full is still "changed" on the probe that finally wakes.
     [ "$MODE" != once ] && return 1
     if [ "$hash" = "$prev" ]; then
-      printf '%s' "$hash" > "$STATE"
+      save_state "$hash"
       return 1
     fi
   fi
 
-  printf '%s' "$hash" > "$STATE"
+  save_state "$hash"
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots"

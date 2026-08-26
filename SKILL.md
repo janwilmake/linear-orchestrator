@@ -167,7 +167,14 @@ line. Report the reason the gate gave, not a bare "nothing to do".
 
 **If the waiter woke this tick, read its block** — do not run `gate.sh` again.
 The numbers would only be seconds newer, and a second run overwrites the state
-hash the first one just set. Two lines tell you which case you are in:
+hash the first one just set.
+
+**A heartbeat tick that only wants to look uses `gate.sh --peek`.** It is the same
+probe and the same output, but it never writes the state file. A plain run while a
+waiter is alive rewrites the hash that waiter compares against, so the waiter's
+next probe sees no change and swallows the `world-changed: yes` it owed the model.
+`--peek` is the right call for every hourly check-in, and for answering "what is
+the board doing" at any time. Use a plain run only when no waiter is running. Two lines tell you which case you are in:
 `--- woke after 21m ---` is real work, and `--- still nothing after 40m, re-arm ---`
 is the bounded wait giving up. On the second one, arm the next waiter and end the
 tick.
