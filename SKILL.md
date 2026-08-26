@@ -34,8 +34,8 @@ and every tick read it:
 | `LO_TEAM`             | `TRACKER_TEAM`      | Linear team name                           |
 | `LO_PREFIX`           | `TICKET_PREFIX`     | ticket id prefix, e.g. `PROJ`              |
 | `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee (unassigned always eligible) |
-| `LO_MAX_FILES`        | `MAX_FILES`         | file count above which a PR *may* be too big (default `15`) |
-| `LO_MAX_NET_LINES`    | `MAX_NET_LINES`     | net new lines above which it *is* — both must hold (default `400`) |
+| `LO_MAX_FILES`        | `MAX_FILES`         | hint only: file count worth a second look (default `15`) |
+| `LO_MAX_NET_LINES`    | `MAX_NET_LINES`     | hint only: net new lines, both must hold to surface (default `400`) |
 | `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
 | `LO_MAX_AGENTS`       | `MAX_AGENTS_CAP`    | hard ceiling on concurrent agents (default `4`) |
 | `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | the day the loop began marking its own comments; nothing older is read as feedback |
@@ -218,10 +218,19 @@ first invisible, so it sat open and unreviewed until a human found it by hand.
 own PRs, and PRs targeting `main` are excluded so a release PR is never mistaken
 for work.
 
-**An `OVERSIZE` line names PRs that are too big for one review**, and that is
-**two** facts rather than one: more than `MAX_FILES` files (`LO_MAX_FILES`,
-default 15 — CLAUDE.md §2.9) **and** more than `MAX_NET_LINES` net new lines
-(`LO_MAX_NET_LINES`, default 400).
+**An `OVERSIZE` line is a hint, not a verdict.** It names PRs past both
+`MAX_FILES` files and `MAX_NET_LINES` net new lines (`LO_MAX_FILES` 15,
+`LO_MAX_NET_LINES` 400).
+
+**Do not split anything because of this line.** Size is a proxy and every proxy
+here is wrong somewhere: a four-thousand-line generated file is trivial to read,
+and three hundred lines spanning auth, tenancy and a migration are not. **Only
+something that has read the diff can judge whether it can be reviewed in one
+sitting, and that is the reviewer.** See *the reviewer decides* below.
+
+What the line is actually for: surfacing a PR that was **already promoted** at a
+size nobody has questioned, so it stops quietly reading "ready". Report it; let a
+human choose.
 
 **File count alone is a bad proxy and must never be used on its own.** A Prettier
 run, an eslint-rule application, a symbol rename or a comment sweep touches
@@ -546,11 +555,10 @@ promote on the spot if it is there — before classifying anything else:
   conflicts — so a conflicted PR does not run CI at all, and its checks stay
   silent rather than red.
   `mergeable == "UNKNOWN"` is **not** this state — it is "ask again next tick".
-- **needs-split** — the `OVERSIZE` line names it and it is still a draft. More
-  files than one reviewer can hold **and** enough net new behaviour to matter, so
-  it is re-cut into a stack before anybody reads it. A mechanical change — a
-  format pass, an eslint rule, a rename — never lands here, however many files it
-  touches, because its net is near zero. See the **needs-split** prompt. A ticket that is genuinely one
+- **needs-split** — **a reviewer read it and said it is too much to review in one
+  sitting**, naming the seam. Not a size threshold: this state is only ever
+  reached by a judgment from something that read the diff. See *the reviewer
+  decides*. See the **needs-split** prompt. A ticket that is genuinely one
   indivisible change is a legitimate answer — the agent says so and the PR keeps
   its size, with the reason in the body.
 - **needs-review** — no review-shaped comment from the loop **dated after the
@@ -578,17 +586,16 @@ promote on the spot if it is there — before classifying anything else:
   so there is no heading to key on — and there never was a good one: a heading with
   nothing under it is a lie the test would believe, and an author who pastes an
   image without one has still done the thing.
-- **ready** — none of the above, **and it is not on the `OVERSIZE` line** unless a
-  needs-split pass already judged it indivisible and said so on the PR. Take it
-  out of draft with `gh pr ready <PR#>`
+- **ready** — none of the above. Take it out of draft with `gh pr ready <PR#>`
   and drop it from the cache. This is the only place a PR becomes ready, and it
   happens on evidence, never on an agent's say-so.
 
 Order the rest, after blocked: needs-mergeable first (nothing else on the PR can be trusted
 while it cannot merge, and CI cannot even run), then needs-fix (a posted review
 with no fix is the most misleading state a PR can be in — it looks checked and is
-not), then **needs-split** (splitting after a review throws that review away), then
-needs-review, then needs-screenshot. Within a kind, oldest PR first.
+not), then **needs-split** (a reviewer has already said it cannot be read whole, so
+nothing further is worth doing to it until it is re-cut), then needs-review,
+then needs-screenshot. Within a kind, oldest PR first.
 
 #### 2d — Start a new ticket
 
@@ -992,8 +999,14 @@ quits. The dev server is worse: it is a detached `npm exec` child, so it
 survives the agent's own session and holds 150–200 MB that the capacity gate
 never sees. The reaper only catches an agent that dies before its teardown; if you finish normally, do this yourself.
 
-**needs-split** — the PR is past `MAX_FILES` and nobody has reviewed it yet. This
-agent does **not** review it; it re-cuts it into a stack so that each layer can be.
+**needs-split** — *the reviewer decides.* A reviewer read this PR and said it was
+too much to review in one sitting, naming the seam. This agent does **not**
+review it; it re-cuts it into a stack so that each layer can be.
+
+**Nothing else puts a PR here.** Not a file count, not a line count, not the
+`OVERSIZE` hint — those surface candidates, and a human or a reviewer decides.
+A PR is split because somebody who read it could not hold it, which is the only
+test that survives a formatting sweep and a dense three-file change alike.
 
 * Say the PR is too large for one reviewer to hold, give its file count, and say
   the job is to re-cut it — **not** to change what it does. **The combined diff
@@ -1028,6 +1041,21 @@ it did not write.
 
 * Say the PR was opened by another agent and has never been reviewed. It must be
   treated as unreviewed work by an unknown author — which is what it is.
+* **You may stop and call it unreviewable.** Before anything else, read the whole
+  diff. If you cannot hold it in one sitting — too many independent decisions, too
+  many unrelated areas, a change you would have to re-read three times to be sure
+  of — **say so and stop**. Post one comment naming *why* and *where the seam is*,
+  and do not produce a review you would not stand behind. That comment is what
+  puts the PR into **needs-split**, and the orchestrator dispatches the split.
+
+  This is a real verdict, not an escape from work, and it is the only honest one
+  when it applies: a review of a diff nobody could hold is worse than no review,
+  because it *looks* like the PR was checked. Size alone does not decide it —
+  four thousand lines of generated code or a formatting pass across two hundred
+  files is one decision and reviewable in minutes, while three hundred lines
+  spanning auth, tenancy and a migration may not be. **You are the judge because
+  you read it; the gate only counts.**
+
 * Run `REVIEW_COMMAND` (`/review <PR#>`), whatever that skill is configured to do
   in this repo.
 * **The review must land as one ordinary PR comment** — `gh pr comment <PR#>
