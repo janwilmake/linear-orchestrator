@@ -31,6 +31,9 @@ TIER2="${LO_TIER2:-}"               # fallback assignee display name
 RAM_PER_AGENT="${LO_RAM_PER_AGENT:-2.5}"
 # Hard ceiling on concurrent agents, whatever the RAM math allows.
 MAX_AGENTS_CAP="${LO_MAX_AGENTS:-4}"
+# A PR past this many files is more than one reviewer can hold (CLAUDE.md §2.9).
+# The gate only reports it; splitting is a dispatch, never something it does.
+MAX_FILES="${LO_MAX_FILES:-15}"
 WAIT_INTERVAL="${LO_WAIT_INTERVAL:-60}"   # --wait: seconds between probes
 WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re-arm
 # Comments written before the loop started marking its own carry no marker, so
@@ -147,20 +150,26 @@ probe() {
          | sed -e 's#.*github.com[:/]##' -e 's#\.git$##')
 
   # --- the world, in one gh call ---
-  prs=$(gh pr list --repo "$slug" --state open --base $BASE --limit 60 \
-    --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName 2>/dev/null)
+  # NOT filtered by --base: a stacked layer's base is the layer below it, never
+  # $BASE, so filtering here made every layer above the first invisible to the
+  # gate — it would sit open and unreviewed until a human found it by hand.
+  # `.mine` below is what keeps this to the loop's own PRs, and `main` is
+  # excluded so a release PR is never mistaken for work.
+  prs=$(gh pr list --repo "$slug" --state open --limit 100 \
+    --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName,changedFiles 2>/dev/null)
   # A broken gh is itself worth waking for — never wait quietly on it.
   [ -z "$prs" ] && { echo "GATE-ERROR: gh pr list failed"; return 0; }
 
   verdicts=$(printf '%s' "$prs" | jq -c '[ .[] | {
       pr: .number, draft: .isDraft, merge: .mergeable, head: .headRefName,
+      base: .baseRefName, files: .changedFiles,
       mine: ((.body // "") | test("🌙")),
       invalid: ([.labels[]?.name] | index("invalid") != null),
       ci: ( [ .statusCheckRollup[]? | select(.conclusion != null
                 and .conclusion != "SKIPPED" and .conclusion != "NEUTRAL") ] as $c
             | if   ([ $c[] | select((.name // "") | startswith("Test (shard")) ] | length) == 0 then "not-run"
               elif ([ $c[] | select(.conclusion != "SUCCESS") ] | length) > 0 then "failing"
-              else "green" end ) } ] | sort_by(.pr)')
+              else "green" end ) } ] | map(select(.base != "main")) | sort_by(.pr)')
 
   regate=$(printf '%s' "$verdicts" | jq -c --argjson held "$held" --argjson inhand "$inhand" '[ .[]
             | select(.draft==false and .mine)
@@ -176,6 +185,22 @@ probe() {
             | select(.draft and .mine)
             | .pr as $p | select($inhand | index($p) | not)
             | .head as $h | select($held | index($h) | not) | .pr ]')
+
+  # A layer whose base is another branch is part of a stack. It appears in DRAFTS
+  # like any other draft, but the model cannot review a stack in an arbitrary
+  # order — layer 2 is unreadable before layer 1 — so name the base here and let
+  # it sort them bottom-up.
+  stack=$(printf '%s' "$verdicts" | jq -c --arg b "$BASE" '[ .[]
+            | select(.mine and .base != $b)
+            | {pr, base, draft} ]')
+
+  # A PR past MAX_FILES is more work than one reviewer can hold. A draft that big
+  # wants splitting BEFORE it is reviewed — reviewing it first spends the review
+  # on a diff that is about to be re-cut. A promoted one that big is worse: it
+  # reads "ready" and nobody can honestly say they read it.
+  oversize=$(printf '%s' "$verdicts" | jq -c --argjson max "$MAX_FILES" '[ .[]
+            | select(.mine and .files > $max)
+            | {pr, files, draft} ]')
 
   # --- human feedback: comments on the loop's PRs that nobody answered ---
   # The agents post through the user's own `gh`, so every comment carries the
@@ -231,6 +256,8 @@ probe() {
   n_regate=$(printf '%s' "$regate"  | jq 'length')
   n_invalid=$(printf '%s' "$invalid" | jq 'length')
   n_drafts=$(printf '%s' "$drafts"  | jq 'length')
+  n_stack=$(printf '%s' "$stack"   | jq 'length')
+  n_oversize=$(printf '%s' "$oversize" | jq 'length')
 
   # --- Linear ready column, but only when a slot could take it ---
   # Cheap pre-filter (assignee tier + not archived); the model still applies the
@@ -360,6 +387,8 @@ probe() {
   [ "$n_feedback" -gt 0 ]   && echo "FEEDBACK: $feedback"
   [ "$n_invalid" -gt 0 ]    && echo "INVALID: $invalid"
   [ "$n_drafts"  -gt 0 ]    && echo "DRAFTS: $drafts"
+  [ "$n_stack"   -gt 0 ]    && echo "STACK: $stack"
+  [ "$n_oversize" -gt 0 ]   && echo "OVERSIZE: $oversize"
   [ "$slots" -gt 0 ] && [ -n "$todo_ids" ] && echo "TODO-CANDIDATES: $todo_ids"
   [ "$queue_stale" = yes ]  && echo "queue: stale, rebuild before 2d"
   return 0

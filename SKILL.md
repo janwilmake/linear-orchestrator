@@ -142,6 +142,8 @@ REGATE: [ … ]            # promoted PRs that stopped being mergeable / went re
 FEEDBACK: [ … ]          # comments on the loop's PRs that nobody answered yet
 INVALID: [ … ]           # PRs the user labelled invalid
 DRAFTS: [ … ]            # open loop drafts, none of them already in an agent's hands
+STACK: [ … ]             # of those, the ones whose base is another branch, with that base
+OVERSIZE: [ … ]          # PRs past MAX_FILES — more than one reviewer can hold
 TODO-CANDIDATES: ID,ID   # eligible Todo ids from Linear (only when slots>0)
 queue: stale, rebuild before 2d
 ```
@@ -200,6 +202,33 @@ not-archived filter, so you still apply the judgment drop-rules and dedup agains
 open PRs. `gate.sh` reads its settings from `.env` (see the settings table);
 `agent-codemode` must be on `PATH` or at `~/.local/node/bin/agent-codemode`, or
 the gate skips Linear and says so in `notes`.
+
+**A `STACK` line means some of those drafts are layers of one stack**, and a stack
+cannot be reviewed in an arbitrary order — layer 2 is unreadable before layer 1
+lands. Each entry names the layer's `base`, so sort them bottom-up: the layer
+based on `BASE_BRANCH` first, then the one based on that layer's head, and so on.
+Review and promote them in that order.
+
+The gate lists open PRs **without filtering on base**, which is what makes those
+layers visible at all — filtering on `--base dev` made every layer above the
+first invisible, so it sat open and unreviewed until a human found it by hand.
+`.mine` (the 🌙 marker in the body) is what keeps the wider query to the loop's
+own PRs, and PRs targeting `main` are excluded so a release PR is never mistaken
+for work.
+
+**An `OVERSIZE` line names PRs past `MAX_FILES`** (`LO_MAX_FILES`, default 15 —
+CLAUDE.md §2.9's "more than ~15 files across unrelated areas is probably two
+PRs"). Two cases, and they want opposite things:
+
+- **`draft: true`** — split it **before** reviewing it. A review spent on a diff
+  that is about to be re-cut is a wasted review, and the fix pass it produces
+  would have to be re-landed across the layers.
+- **`draft: false`** — it is already promoted, reads "ready", and nobody can
+  honestly claim to have read it. Say so in the tick report. Do not silently
+  re-draft a PR a human may already be reading; tell them and let them choose.
+
+**The gate only reports the size. It never splits anything** — that is a
+dispatch, and it is a job of its own.
 
 `FEEDBACK` and `REGATE` are work at any slot count, because an ack, a re-draft
 and a follow-up ticket need no agent — only the rework behind them does.
@@ -501,6 +530,11 @@ promote on the spot if it is there — before classifying anything else:
   conflicts — so a conflicted PR does not run CI at all, and its checks stay
   silent rather than red.
   `mergeable == "UNKNOWN"` is **not** this state — it is "ask again next tick".
+- **needs-split** — the `OVERSIZE` line names it and it is still a draft. More
+  files than one reviewer can hold, so it is re-cut into a stack before anybody
+  reads it. See the **needs-split** prompt. A ticket that is genuinely one
+  indivisible change is a legitimate answer — the agent says so and the PR keeps
+  its size, with the reason in the body.
 - **needs-review** — no review-shaped comment from the loop **dated after the
   head commit**. The test is the order, not the mere existence: an agent that
   pushes code and dies before running `/review` leaves a PR carrying an *older*
@@ -526,14 +560,17 @@ promote on the spot if it is there — before classifying anything else:
   so there is no heading to key on — and there never was a good one: a heading with
   nothing under it is a lie the test would believe, and an author who pastes an
   image without one has still done the thing.
-- **ready** — none of the above. Take it out of draft with `gh pr ready <PR#>`
+- **ready** — none of the above, **and it is not on the `OVERSIZE` line** unless a
+  needs-split pass already judged it indivisible and said so on the PR. Take it
+  out of draft with `gh pr ready <PR#>`
   and drop it from the cache. This is the only place a PR becomes ready, and it
   happens on evidence, never on an agent's say-so.
 
 Order the rest, after blocked: needs-mergeable first (nothing else on the PR can be trusted
 while it cannot merge, and CI cannot even run), then needs-fix (a posted review
 with no fix is the most misleading state a PR can be in — it looks checked and is
-not), then needs-review, then needs-screenshot. Within a kind, oldest PR first.
+not), then **needs-split** (splitting after a review throws that review away), then
+needs-review, then needs-screenshot. Within a kind, oldest PR first.
 
 #### 2d — Start a new ticket
 
@@ -912,30 +949,60 @@ uploaded, the two `cca` footguns, the do-not-review rule, and the closing
 sequence. Everything else the
 agent already has.
 
-### The four prompts for finishing a draft (2b and 2c)
+### The five prompts for finishing a draft (2b and 2c)
 
 Shorter than the ticket prompt: no branching, no Decisions section, no ticket
 claim. The PR exists. Each starts with `gh pr checkout <PR#>`, and each ends
 with **leave it a draft** — only the orchestrator promotes, in 2c.
 
-**All four start every comment they write with the line `<!-- 🌙 -->`** — the
+**All five start every comment they write with the line `<!-- 🌙 -->`** — the
 review, the reply, the note about something found on the way. An unmarked comment
 is how the loop recognises a person, so an unmarked comment from an agent gets
 answered as one (2a).
 
-**And all four collapse what they write**, inside a `<details>` with a summary
+**And all five collapse what they write**, inside a `<details>` with a summary
 that names the contents (`🌙 Review — 6 findings, 2 blockers`, `🌙 Fix pass —
 commit a1b2c3d, 6 of 6`). A blank line under the `<summary>` line, or the
 markdown inside comes out raw. The reader should be able to scroll a PR and see
 only the human voices.
 
-**All four end with the same teardown, and it is not optional:** close every
+**All five end with the same teardown, and it is not optional:** close every
 Chrome tab you opened and stop the dev server you started, as the last thing you
 do. Tabs are scoped per MCP session, so a tab an agent abandons cannot be closed
 by the orchestrator or by any other agent — it simply sits there until Chrome
 quits. The dev server is worse: it is a detached `npm exec` child, so it
 survives the agent's own session and holds 150–200 MB that the capacity gate
 never sees. The reaper only catches an agent that dies before its teardown; if you finish normally, do this yourself.
+
+**needs-split** — the PR is past `MAX_FILES` and nobody has reviewed it yet. This
+agent does **not** review it; it re-cuts it into a stack so that each layer can be.
+
+* Say the PR is too large for one reviewer to hold, give its file count, and say
+  the job is to re-cut it — **not** to change what it does. **The combined diff
+  of the stack must equal the original diff.** Anything else is a rewrite wearing
+  a split's clothes.
+* **Find the seams from the dependency order**, not from the file tree. A layer
+  must build and pass its own tests on its own, so a schema change and its
+  migration go in the bottom layer, pure modules above that, the routes that call
+  them above that, and the UI last. If a layer cannot stand alone, it is in the
+  wrong place.
+* Use the repo's own stacking tool if it has one — this repo has a `gh-stack`
+  skill. **Each layer targets the layer below it, never `BASE_BRANCH`**, except
+  the bottom one.
+* **Every layer is a draft**, carries the 🌙 marker line, and links the ticket.
+  The orchestrator reviews and promotes them bottom-up.
+* **Close the original PR last**, after the stack is up and verified, with a
+  comment linking every layer. Never close it first: a window where the work has
+  no PR is a window where it is lost. If the original carried a review or human
+  comments, say in that comment that its history lives there.
+* **"This is one indivisible change" is a legitimate answer.** A migration whose
+  callers cannot compile without it, or a single generated file, does not split.
+  Say so on the PR with the reason, leave it as it is, and the orchestrator
+  reviews it whole. Do not manufacture layers to hit a number.
+
+Note what this costs: the stack's layers are invisible to `gh pr list --base`,
+which is why the gate no longer filters on base and prints a `STACK` line
+instead. Without that, every layer above the first would sit unreviewed.
 
 **needs-review** — the main one, and the reason the implementer stops early. This
 agent owns the review, the fixes and the PR body, and it starts by reading a diff
