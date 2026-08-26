@@ -34,6 +34,8 @@ and every tick read it:
 | `LO_TEAM`             | `TRACKER_TEAM`      | Linear team name                           |
 | `LO_PREFIX`           | `TICKET_PREFIX`     | ticket id prefix, e.g. `PROJ`              |
 | `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee (unassigned always eligible) |
+| `LO_MAX_FILES`        | `MAX_FILES`         | file count above which a PR *may* be too big (default `15`) |
+| `LO_MAX_NET_LINES`    | `MAX_NET_LINES`     | net new lines above which it *is* — both must hold (default `400`) |
 | `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
 | `LO_MAX_AGENTS`       | `MAX_AGENTS_CAP`    | hard ceiling on concurrent agents (default `4`) |
 | `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | the day the loop began marking its own comments; nothing older is read as feedback |
@@ -143,7 +145,7 @@ FEEDBACK: [ … ]          # comments on the loop's PRs that nobody answered yet
 INVALID: [ … ]           # PRs the user labelled invalid
 DRAFTS: [ … ]            # open loop drafts, none of them already in an agent's hands
 STACK: [ … ]             # of those, the ones whose base is another branch, with that base
-OVERSIZE: [ … ]          # PRs past MAX_FILES — more than one reviewer can hold
+OVERSIZE: [ … ]          # too big for one review: many files AND much new behaviour
 TODO-CANDIDATES: ID,ID   # eligible Todo ids from Linear (only when slots>0)
 queue: stale, rebuild before 2d
 ```
@@ -216,9 +218,23 @@ first invisible, so it sat open and unreviewed until a human found it by hand.
 own PRs, and PRs targeting `main` are excluded so a release PR is never mistaken
 for work.
 
-**An `OVERSIZE` line names PRs past `MAX_FILES`** (`LO_MAX_FILES`, default 15 —
-CLAUDE.md §2.9's "more than ~15 files across unrelated areas is probably two
-PRs"). Two cases, and they want opposite things:
+**An `OVERSIZE` line names PRs that are too big for one review**, and that is
+**two** facts rather than one: more than `MAX_FILES` files (`LO_MAX_FILES`,
+default 15 — CLAUDE.md §2.9) **and** more than `MAX_NET_LINES` net new lines
+(`LO_MAX_NET_LINES`, default 400).
+
+**File count alone is a bad proxy and must never be used on its own.** A Prettier
+run, an eslint-rule application, a symbol rename or a comment sweep touches
+hundreds of files and is trivial to read — its additions and deletions cancel, so
+its net is near zero and it is never flagged. Three files of auth logic can be
+far harder than thirty of formatting. Net new lines is what separates them:
+mechanical changes net nothing, features net a lot.
+
+A **deletion** PR nets negative and is deliberately not flagged either. Removing
+code across many files is easier to read than adding it, and what breaks shows up
+in CI rather than in the diff.
+
+Two cases, and they want opposite things:
 
 - **`draft: true`** — split it **before** reviewing it. A review spent on a diff
   that is about to be re-cut is a wasted review, and the fix pass it produces
@@ -531,8 +547,10 @@ promote on the spot if it is there — before classifying anything else:
   silent rather than red.
   `mergeable == "UNKNOWN"` is **not** this state — it is "ask again next tick".
 - **needs-split** — the `OVERSIZE` line names it and it is still a draft. More
-  files than one reviewer can hold, so it is re-cut into a stack before anybody
-  reads it. See the **needs-split** prompt. A ticket that is genuinely one
+  files than one reviewer can hold **and** enough net new behaviour to matter, so
+  it is re-cut into a stack before anybody reads it. A mechanical change — a
+  format pass, an eslint rule, a rename — never lands here, however many files it
+  touches, because its net is near zero. See the **needs-split** prompt. A ticket that is genuinely one
   indivisible change is a legitimate answer — the agent says so and the PR keeps
   its size, with the reason in the body.
 - **needs-review** — no review-shaped comment from the loop **dated after the
