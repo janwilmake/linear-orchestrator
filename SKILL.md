@@ -34,8 +34,6 @@ and every tick read it:
 | `LO_TEAM`             | `TRACKER_TEAM`      | Linear team name                           |
 | `LO_PREFIX`           | `TICKET_PREFIX`     | ticket id prefix, e.g. `PROJ`              |
 | `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee (unassigned always eligible) |
-| `LO_MAX_FILES`        | `MAX_FILES`         | hint only: file count worth a second look (default `15`) |
-| `LO_MAX_NET_LINES`    | `MAX_NET_LINES`     | hint only: net new lines, both must hold to surface (default `400`) |
 | `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
 | `LO_MAX_AGENTS`       | `MAX_AGENTS_CAP`    | hard ceiling on concurrent agents (default `4`) |
 | `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | the day the loop began marking its own comments; nothing older is read as feedback |
@@ -145,7 +143,6 @@ FEEDBACK: [ … ]          # comments on the loop's PRs that nobody answered yet
 INVALID: [ … ]           # PRs the user labelled invalid
 DRAFTS: [ … ]            # open loop drafts, none of them already in an agent's hands
 STACK: [ … ]             # of those, the ones whose base is another branch, with that base
-OVERSIZE: [ … ]          # too big for one review: many files AND much new behaviour
 TODO-CANDIDATES: ID,ID   # eligible Todo ids from Linear (only when slots>0)
 queue: stale, rebuild before 2d
 ```
@@ -217,43 +214,6 @@ first invisible, so it sat open and unreviewed until a human found it by hand.
 `.mine` (the 🌙 marker in the body) is what keeps the wider query to the loop's
 own PRs, and PRs targeting `main` are excluded so a release PR is never mistaken
 for work.
-
-**An `OVERSIZE` line is a hint, not a verdict.** It names PRs past both
-`MAX_FILES` files and `MAX_NET_LINES` net new lines (`LO_MAX_FILES` 15,
-`LO_MAX_NET_LINES` 400).
-
-**Do not split anything because of this line.** Size is a proxy and every proxy
-here is wrong somewhere: a four-thousand-line generated file is trivial to read,
-and three hundred lines spanning auth, tenancy and a migration are not. **Only
-something that has read the diff can judge whether it can be reviewed in one
-sitting, and that is the reviewer.** See *the reviewer decides* below.
-
-What the line is actually for: surfacing a PR that was **already promoted** at a
-size nobody has questioned, so it stops quietly reading "ready". Report it; let a
-human choose.
-
-**File count alone is a bad proxy and must never be used on its own.** A Prettier
-run, an eslint-rule application, a symbol rename or a comment sweep touches
-hundreds of files and is trivial to read — its additions and deletions cancel, so
-its net is near zero and it is never flagged. Three files of auth logic can be
-far harder than thirty of formatting. Net new lines is what separates them:
-mechanical changes net nothing, features net a lot.
-
-A **deletion** PR nets negative and is deliberately not flagged either. Removing
-code across many files is easier to read than adding it, and what breaks shows up
-in CI rather than in the diff.
-
-Two cases, and they want opposite things:
-
-- **`draft: true`** — split it **before** reviewing it. A review spent on a diff
-  that is about to be re-cut is a wasted review, and the fix pass it produces
-  would have to be re-landed across the layers.
-- **`draft: false`** — it is already promoted, reads "ready", and nobody can
-  honestly claim to have read it. Say so in the tick report. Do not silently
-  re-draft a PR a human may already be reading; tell them and let them choose.
-
-**The gate only reports the size. It never splits anything** — that is a
-dispatch, and it is a job of its own.
 
 `FEEDBACK` and `REGATE` are work at any slot count, because an ack, a re-draft
 and a follow-up ticket need no agent — only the rework behind them does.
@@ -1003,10 +963,10 @@ never sees. The reaper only catches an agent that dies before its teardown; if y
 too much to review in one sitting, naming the seam. This agent does **not**
 review it; it re-cuts it into a stack so that each layer can be.
 
-**Nothing else puts a PR here.** Not a file count, not a line count, not the
-`OVERSIZE` hint — those surface candidates, and a human or a reviewer decides.
-A PR is split because somebody who read it could not hold it, which is the only
-test that survives a formatting sweep and a dense three-file change alike.
+**Nothing else puts a PR here.** Not a file count, not a line count, not a
+threshold the gate measured. A PR is split because somebody who read it could not
+hold it, which is the only test that survives a formatting sweep and a dense
+three-file change alike.
 
 * Say the PR is too large for one reviewer to hold, give its file count, and say
   the job is to re-cut it — **not** to change what it does. **The combined diff
