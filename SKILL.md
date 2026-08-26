@@ -236,15 +236,35 @@ one, and by the time four layers had been reviewed and fixed, all four were behi
 their bases. Every one of them was promoted and reading green.
 
 **Fix it by restacking the whole stack, bottom-up, with the repo's stack tool** —
-`gh stack sync` in this repo, then push. Not layer by layer: each layer sits on the
-one below, so re-cutting one in isolation moves the ground under every layer above
-it. That is why the review prompts forbid an ad-hoc rebase or force-push of a
-single layer. **A restack of the whole stack in one operation is the sanctioned
-exception**, and it is the only one.
+a cascading rebase across the layers, then push. Not layer by layer: each layer
+sits on the one below, so re-cutting one in isolation moves the ground under every
+layer above it. That is why the review prompts forbid an ad-hoc rebase or
+force-push of a single layer. **A restack of the whole stack in one operation is
+the sanctioned exception**, and it is the only one.
 
-Do it when the stack is otherwise finished — every layer reviewed and promoted —
-rather than after each fix pass. Restacking mid-review invalidates the diff a
-reviewer is holding, and the layers go behind again on the next fix anyway.
+**Restack when the stack is otherwise finished** — every layer reviewed and
+promoted — rather than after each fix pass. Restacking mid-review invalidates the
+diff a reviewer is holding, and the layers go behind again on the next fix anyway.
+
+**This is the loop's own work. It does not ask.** Finishing a stack means leaving
+it mergeable, and a stack that cannot merge is not finished. Do not park a
+`RESTACK` line as a note for the user or hand it over as a runbook — dispatch it,
+the same as any other work. The user asked for exactly this on 26 Aug 2026, after
+being asked for a go-ahead that should never have been requested.
+
+The general rule still stands and is not weakened: rewriting history on a branch
+with an open PR needs the user's say-so. **A stack restack is the standing
+exception, and its edges are narrow** — the layers of one stack the loop opened
+itself, rebased only onto each other, when every layer is promoted. Anything
+outside that is still a question for a person.
+
+**Give it its own agent, and never run it in the user's working directory.** A
+cascading rebase can conflict — a fix-pass commit on a lower layer against the
+code a higher layer put on top of it — and a conflict needs someone who can read
+both sides and choose. Run in the user's own checkout, a conflict leaves them
+sitting mid-rebase in the tree they are working in. An agent has its own clone and
+its own context, and can abort without costing anyone anything. See the
+**restack** prompt.
 
 `FEEDBACK` and `REGATE` are work at any slot count, because an ack, a re-draft
 and a follow-up ticket need no agent — only the rework behind them does.
@@ -264,6 +284,9 @@ empty:**
    merged, or a PR marked `INVALID_LABEL`. Below.
 2. **De-gate** — one of the loop's own promoted PRs that has since stopped being
    mergeable, or whose CI is red. Back to draft, fixed, re-promoted. Below.
+   **A `RESTACK` line is a de-gate too**: the PRs read mergeable one by one, but
+   the stack cannot merge, so the work is not finished. It needs an agent of its
+   own — see the **restack** prompt — and it needs no permission.
 3. **Finish a draft** — an open draft PR with leftover work: no review, no fix
    pass after its review, no screenshot on a user-visible change, a conflict, or
    CI that is not green. Below.
@@ -1025,6 +1048,40 @@ three-file change alike.
 Note what this costs: the stack's layers are invisible to `gh pr list --base`,
 which is why the gate no longer filters on base and prints a `STACK` line
 instead. Without that, every layer above the first would sit unreviewed.
+
+**restack** — *a finished stack that cannot merge.* Reached from a `RESTACK`
+line, never from a person asking. It is a git operation and nothing else: the
+agent writes no features and fixes no bugs.
+
+* Name the stack, and list every branch bottom to top with its PR number. Give the
+  `behind` count for each layer, so the agent can prove it fixed the thing it was
+  sent for.
+* Say why: every fix pass added commits to a lower layer, the layers above never
+  took them, and the forge refuses the stack while each PR still reports itself
+  mergeable alone.
+* **Rebase the layers onto each other only — not onto the trunk.** The trunk has
+  moved on since the stack was cut, and pulling it in underneath changes what the
+  PRs contain. The job is to make the stack internally consistent, nothing more.
+* Force-pushing the layers is expected here and is the whole point. Say so, or an
+  agent that has read the review prompts will refuse.
+* **Verify with numbers, not with a green feeling.** Compare each layer's base
+  against its head and require `behind_by` to be 0 for every one. Confirm all the
+  PRs are still open and still out of draft — a restack must not re-draft anything.
+* **Tell it how to resolve a conflict**, because that is the reason this is an
+  agent and not one command. The conflict is a lower layer's fix-pass commit
+  against the code a higher layer put on top of it, and **the lower layer's fix is
+  the newer, reviewed intent**: keep it, and adapt the layer above around it. Never
+  drop a fix to make a rebase easy. If a resolution would change what the stack
+  *does* rather than how it is arranged, stop, leave the rebase aborted, and report
+  which two commits fought.
+* After any resolution, run the `AGENT_GUIDE` checks on the branch that conflicted
+  **and every branch above it**. A rebase that compiles is not a rebase that works.
+* It must not merge, must not touch the trunk, must not edit a PR body, and must
+  not change any commit's content beyond what the conflict required — the combined
+  diff of a split stack was proved equal to the original PR, and a restack keeps it
+  that way.
+* It reports on the top layer's PR: what it rebased, every conflict and how it went,
+  and the five verification numbers.
 
 **needs-review** — the main one, and the reason the implementer stops early. This
 agent owns the review, the fixes and the PR body, and it starts by reading a diff
