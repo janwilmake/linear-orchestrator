@@ -189,7 +189,31 @@ probe() {
   # it sort them bottom-up.
   stack=$(printf '%s' "$verdicts" | jq -c --arg b "$BASE" '[ .[]
             | select(.mine and .base != $b)
-            | {pr, base, draft} ]')
+            | {pr, base, draft, head} ]')
+
+  # A layer goes stale the moment its base layer takes a commit — and NOTHING
+  # else here notices. `mergeable` compares the layer against its base and stays
+  # MERGEABLE, because being behind is not a conflict. So a fix pass on layer 1
+  # silently leaves layers 2..6 built on a head that no longer exists, and the
+  # forge refuses to merge the stack while every gate here still reads green.
+  # Seen on the HYR2-993 stack: one fix commit on layer 1 put four layers behind.
+  #
+  # `behind_by` from the compare API is the only signal that says so. One call
+  # per layer, and only when a stack exists at all — which is almost never, so
+  # the common probe pays nothing. Failures leave the layer out rather than
+  # inventing a zero: a restack claimed on a failed lookup is worse than silence.
+  restack="[]"
+  if [ "$(printf '%s' "$stack" | jq 'length')" -gt 0 ]; then
+    restack=$(printf '%s' "$stack" | jq -c '.[] | [.pr, .base, .head] | @tsv' -r | while IFS=$'\t' read -r p b h; do
+      cmp=$(gh api "repos/$slug/compare/$b...$h" --jq '.behind_by' 2>/dev/null)
+      # A non-numeric answer is a failed lookup, and [ -gt ] returns false for it
+      # rather than treating it as a number. `case` cannot be used here: bash
+      # mis-parses a case pattern's `)` inside a command substitution.
+      if [ -n "$cmp" ] && [ "$cmp" -gt 0 ] 2>/dev/null; then
+        printf '{"pr":%s,"base":"%s","behind":%s}\n' "$p" "$b" "$cmp"
+      fi
+    done | jq -s -c '.')
+  fi
 
   # --- human feedback: comments on the loop's PRs that nobody answered ---
   # The agents post through the user's own `gh`, so every comment carries the
@@ -246,6 +270,7 @@ probe() {
   n_invalid=$(printf '%s' "$invalid" | jq 'length')
   n_drafts=$(printf '%s' "$drafts"  | jq 'length')
   n_stack=$(printf '%s' "$stack"   | jq 'length')
+  n_restack=$(printf '%s' "$restack" | jq 'length')
 
   # --- Linear ready column, but only when a slot could take it ---
   # Cheap pre-filter (assignee tier + not archived); the model still applies the
@@ -376,6 +401,7 @@ probe() {
   [ "$n_invalid" -gt 0 ]    && echo "INVALID: $invalid"
   [ "$n_drafts"  -gt 0 ]    && echo "DRAFTS: $drafts"
   [ "$n_stack"   -gt 0 ]    && echo "STACK: $stack"
+  [ "$n_restack" -gt 0 ]    && echo "RESTACK: $restack"
   [ "$slots" -gt 0 ] && [ -n "$todo_ids" ] && echo "TODO-CANDIDATES: $todo_ids"
   [ "$queue_stale" = yes ]  && echo "queue: stale, rebuild before 2d"
   return 0

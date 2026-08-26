@@ -143,6 +143,7 @@ FEEDBACK: [ … ]          # comments on the loop's PRs that nobody answered yet
 INVALID: [ … ]           # PRs the user labelled invalid
 DRAFTS: [ … ]            # open loop drafts, none of them already in an agent's hands
 STACK: [ … ]             # of those, the ones whose base is another branch, with that base
+RESTACK: [ … ]           # stack layers now behind their base, with how far
 TODO-CANDIDATES: ID,ID   # eligible Todo ids from Linear (only when slots>0)
 queue: stale, rebuild before 2d
 ```
@@ -214,6 +215,29 @@ first invisible, so it sat open and unreviewed until a human found it by hand.
 `.mine` (the 🌙 marker in the body) is what keeps the wider query to the loop's
 own PRs, and PRs targeting `main` are excluded so a release PR is never mistaken
 for work.
+
+**A `RESTACK` line means the stack cannot merge, and nothing else here says so.**
+A layer goes stale the moment the layer below it takes a commit — which is exactly
+what a fix pass does. Being behind is not a conflict, so `mergeable` stays
+`MERGEABLE`, CI stays green, and every gate in this file reads clean while the
+forge refuses the stack with *"Some of the pull requests in this stack cannot be
+merged."* The `behind` count comes from the compare API, which is the only signal
+that tells the difference.
+
+Seen on the real HYR2-993 stack: one fix commit on layer 1 left layer 2 behind by
+one, and by the time four layers had been reviewed and fixed, all four were behind
+their bases. Every one of them was promoted and reading green.
+
+**Fix it by restacking the whole stack, bottom-up, with the repo's stack tool** —
+`gh stack sync` in this repo, then push. Not layer by layer: each layer sits on the
+one below, so re-cutting one in isolation moves the ground under every layer above
+it. That is why the review prompts forbid an ad-hoc rebase or force-push of a
+single layer. **A restack of the whole stack in one operation is the sanctioned
+exception**, and it is the only one.
+
+Do it when the stack is otherwise finished — every layer reviewed and promoted —
+rather than after each fix pass. Restacking mid-review invalidates the diff a
+reviewer is holding, and the layers go behind again on the next fix anyway.
 
 `FEEDBACK` and `REGATE` are work at any slot count, because an ack, a re-draft
 and a follow-up ticket need no agent — only the rework behind them does.
