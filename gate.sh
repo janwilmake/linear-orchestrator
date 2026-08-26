@@ -174,8 +174,20 @@ probe() {
       base: .baseRefName,
       mine: ((.body // "") | test("🌙")),
       invalid: ([.labels[]?.name] | index("invalid") != null),
-      ci: ( [ .statusCheckRollup[]? | select(.conclusion != null
-                and .conclusion != "SKIPPED" and .conclusion != "NEUTRAL") ] as $c
+      # Only a real verdict counts. Three things look like one and are not:
+      #   ""         a run still QUEUED or IN_PROGRESS. GitHub returns an empty
+      #              string here, NOT null, so a `!= null` guard lets it through
+      #              and every in-flight check reads as a failure.
+      #   CANCELLED  a run superseded by a newer push. A force-push cancels the
+      #              runs in flight and starts fresh ones, and the rollup returns
+      #              BOTH for the same check name. Cancelled is "no verdict yet",
+      #              never "failed" — treating it as failure re-drafts a healthy PR.
+      #   SKIPPED / NEUTRAL — never ran, or ran and declined to judge.
+      # Both of the first two were found on 26 Aug, when a restack force-pushed
+      # five promoted PRs and the gate reported them as failing CI.
+      ci: ( [ .statusCheckRollup[]? | select(.conclusion != null and .conclusion != ""
+                and .conclusion != "SKIPPED" and .conclusion != "NEUTRAL"
+                and .conclusion != "CANCELLED") ] as $c
             | if   ([ $c[] | select((.name // "") | startswith("Test (shard")) ] | length) == 0 then "not-run"
               elif ([ $c[] | select(.conclusion != "SUCCESS") ] | length) > 0 then "failing"
               else "green" end ) } ] | map(select(.base != "main")) | sort_by(.pr)')
