@@ -1,6 +1,6 @@
 ---
 name: linear-orchestrator
-description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 5-minute loop, spawns one agent per 2.5 GB of free RAM, picks Todo tickets from Linear (a preferred assignee or unassigned first, a fallback assignee second), and spawns `cca` agents on Opus — one to write the code and open a draft PR, a second in a fresh context to review that diff and fix what the review found. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
+description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 5-minute loop, spawns one agent per 2.5 GB of free RAM every tick (uncapped by default, so it reaches full capacity immediately), picks Todo tickets from Linear assigned to a preferred or fallback assignee — unassigned tickets and the Backlog column are opt-in, not the default, and spawns `cca` agents on Opus — one to write the code and open a draft PR, a second in a fresh context to review that diff and fix what the review found. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
 ---
 
 # linear-orchestrator — unattended nightly ticket runner
@@ -33,19 +33,43 @@ and every tick read it:
 | `LO_BASE`             | `BASE_BRANCH`       | branch to cut from and target (`dev`)      |
 | `LO_TEAM`             | `TRACKER_TEAM`      | Linear team name                           |
 | `LO_PREFIX`           | `TICKET_PREFIX`     | ticket id prefix, e.g. `PROJ`              |
-| `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee (unassigned always eligible) |
+| `LO_TIER1` `LO_TIER2` | `ASSIGNEE_TIER_1/2` | preferred / fallback assignee. Only these are taken |
+| `LO_ALLOW_UNASSIGNED` | `ALLOW_UNASSIGNED`  | `1` to also take unassigned tickets (default `0`, off) |
+| `LO_ALLOW_BACKLOG`    | `ALLOW_BACKLOG`     | `1` to fall to `Backlog` when `Todo` is empty (default `0`, off) |
+| `LO_OWNER`            | `OWNER`             | short tag identifying this instance on the forge; **required when two orchestrators share one repo** |
 | `LO_RAM_PER_AGENT`    | `RAM_PER_AGENT_GB`  | GB per agent (default `2.5`)               |
-| `LO_MAX_AGENTS`       | `MAX_AGENTS_CAP`    | hard ceiling on concurrent agents (default `4`) |
+| `LO_MAX_AGENTS`       | `MAX_AGENTS_CAP`    | ceiling on concurrent agents; `0` = unlimited (default `0`) |
+| `LO_SLOT_SCAN`        | `SLOT_SCAN`         | how many agent slots to probe for liveness (default: what total RAM allows, floor 8) |
 | `LO_FEEDBACK_SINCE`   | `FEEDBACK_SINCE`    | the day the loop began marking its own comments; nothing older is read as feedback |
 | `LO_FEEDBACK_LOGINS`  | `FEEDBACK_LOGINS`   | comma-separated GitHub logins whose comments steer the loop; empty means every non-bot login |
 
 Fixed, no config: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE`
-your repo's guide (`CLAUDE.md`) · `READY_STATUS` `Todo` then `Backlog` ·
+your repo's guide (`CLAUDE.md`) · `READY_STATUS` `Todo`, then `Backlog` only
+when `ALLOW_BACKLOG=1` ·
 `CLAIMED_STATUS` `In Progress` · `INVALID_LABEL` `invalid` · `REVIEW_COMMAND`
 `/review <PR#>` · `DEV_SERVER` Vite on a free port 5200–5299 · `PROD_SURFACES`
 never write (prod vars/config, prod data, prod dashboards) · `QUEUE_CACHE` /
 `WORK_CACHE` `~/.claude/linear-orchestrator/<PREFIX>-{queue,work}.json` ·
-`MAX_AGENTS` = `min(MAX_AGENTS_CAP, floor(ram / RAM_PER_AGENT_GB))`.
+`MAX_AGENTS` = `floor(ram / RAM_PER_AGENT_GB)`, or
+`min(MAX_AGENTS_CAP, that)` when `MAX_AGENTS_CAP > 0`.
+
+**Every tick spawns every free slot, not one.** `slots` is
+`floor(free_ram / RAM_PER_AGENT_GB)` bounded by `MAX_AGENTS - busy`, and step 2
+takes that many pieces of work. With the cap at its `0` default the only bound
+is memory, so a tick that finds six slots' worth of free RAM starts six agents
+at once and the loop reaches full capacity on its first tick with work. Set
+`LO_MAX_AGENTS` to a positive number only when you want to hold some of the
+machine back for yourself.
+
+**Two orchestrators on one repo need `LO_OWNER`.** Splitting by assignee is
+enough on the tracker — each instance takes only its own tiers, so neither can
+claim the other's tickets. It is *not* enough on the forge: every instance
+writes the same 🌙 marker, and `.mine` is what decides which PRs a gate reviews,
+re-drafts, promotes and answers feedback on. Without a distinct `LO_OWNER` per
+instance, each one reads the other's pull requests as its own and both act on
+them. With it, the marker each instance writes and matches is
+`🌙 lo:<LO_OWNER>`, and the two never overlap. Leave it empty only on a repo
+where a single orchestrator runs.
 
 **Precondition: your repo must have its own agent guide.** The prompt this skill
 hands each agent is twelve short paragraphs *because* `AGENT_GUIDE` supplies the
@@ -219,9 +243,11 @@ Review and promote them in that order.
 The gate lists open PRs **without filtering on base**, which is what makes those
 layers visible at all — filtering on `--base dev` made every layer above the
 first invisible, so it sat open and unreviewed until a human found it by hand.
-`.mine` (the 🌙 marker in the body) is what keeps the wider query to the loop's
-own PRs, and PRs targeting `main` are excluded so a release PR is never mistaken
-for work.
+`.mine` (the marker in the body — `🌙 lo:<OWNER>` when `LO_OWNER` is set, a bare
+`🌙` when it is not) is what keeps the wider query to the loop's own PRs, and PRs
+targeting `main` are excluded so a release PR is never mistaken for work. On a
+repo with a second orchestrator the owner tag is the only thing separating them:
+match on the bare marker and each instance adopts the other's PRs.
 
 **A `RESTACK` line means the stack cannot merge, and nothing else here says so.**
 A layer goes stale the moment the layer below it takes a commit — which is exactly
@@ -311,8 +337,9 @@ something, and that outranks every conclusion the loop reached on its own.
 every agent posts through the user's own `gh`, so every comment on every PR
 carries the user's login. So the loop marks its own instead.
 
-> **Every comment the loop or one of its agents writes on GitHub carries
-> `<!-- 🌙 -->` as its first line. On a Linear ticket, start with a visible `🌙`
+> **Every comment the loop or one of its agents writes on GitHub carries the
+> marker line as its first line — `<!-- 🌙 lo:<OWNER> -->` when `LO_OWNER` is
+> set, `<!-- 🌙 -->` when it is not. On a Linear ticket, start with a visible `🌙`
 > instead** — Linear renders HTML comments as literal text (`<!-- 🌙 →`), so
 > the invisible form is garbage there. No exception — reviews, fix-pass
 > replies, promotion comments, de-gate notices, acks. An unmarked comment on a
@@ -680,8 +707,14 @@ next:
 
 1. `ASSIGNEE_TIER_1`
 2. `ASSIGNEE_TIER_2`
+3. Unassigned — **only when `ALLOW_UNASSIGNED=1`**, and last even then.
 
-Never take a ticket assigned to anyone else.
+Never take a ticket assigned to anyone else. **With `ALLOW_UNASSIGNED=0` (the
+default) an unassigned ticket is not work** — somebody putting a name on a
+ticket is the signal that it is meant for this loop, and on a tracker shared
+with another orchestrator it is also the only thing keeping the two apart. The
+gate applies this filter too, so an unassigned ticket never even reaches
+`TODO-CANDIDATES`.
 
 **Then drop every ticket that this loop must not touch:**
 
@@ -727,14 +760,21 @@ Then take the first `slots` of them.
 Write the file even when nothing survives. An empty queue with a fresh
 `builtAt` is what buys the next 30 minutes of ticks their cheap path.
 
-**If nothing survives, run the same pass again over `Backlog`** — same tiers,
-same drop rules, same ordering — and append what survives *after* the `Todo`
-entries. Backlog is a real source of work here, not a last resort, but it is
-strictly second: a `Todo` ticket always outranks a `Backlog` one regardless of
-priority, because somebody deliberately moved it to `Todo`.
+**If nothing survives, and only if `ALLOW_BACKLOG=1`, run the same pass again
+over `Backlog`** — same tiers, same drop rules, same ordering — and append what
+survives *after* the `Todo` entries. It is strictly second: a `Todo` ticket
+always outranks a `Backlog` one regardless of priority, because somebody
+deliberately moved it to `Todo`.
+
+**With `ALLOW_BACKLOG=0` (the default) the backlog pass does not run at all.**
+An untriaged ticket is not a queued one, and a loop that reaches into the
+backlog on a quiet night invents work nobody asked for. Turn it on only for a
+board where the backlog genuinely is a work queue.
 
 Run the backlog pass only when the `Todo` pass yields nothing eligible. An
 eligible `Todo` ticket, even one Low-priority ticket, is enough to skip it.
+The gate reads the same fall, so `TODO-CANDIDATES` names the column it came
+from — `(from Todo)` or `(from Backlog)`.
 
 If neither column yields anything, write the empty queue with a fresh `builtAt`,
 end the tick, and say so plainly. Do not lower the bar to find work.
@@ -930,9 +970,13 @@ true only here:
 > **It stays a draft** (`gh pr create --draft`), and you never take it out. The
 > orchestrator does that later, once it has a review, a fix pass and a
 > screenshot. Start the PR body with:
-> `🌙 opened by the nightly orchestrator. Not seen by a human. Read the Decisions section before merging.`
+> `🌙 lo:<OWNER> opened by the nightly orchestrator. Not seen by a human. Read the Decisions section before merging.`
+> (drop the ` lo:<OWNER>` when `LO_OWNER` is empty). **The owner tag is what
+> tells two orchestrators on one repo apart — a PR body without the tag the gate
+> matches on is invisible to its own loop, and a PR carrying the wrong one gets
+> reviewed by the wrong machine.**
 >
-> **Start every comment you write on the PR with the line `<!-- 🌙 -->`, and
+> **Start every comment you write on the PR with the marker line, and
 > every comment on the ticket with a visible `🌙` at the start of the first
 > line** — Linear renders HTML comments as literal text, so the invisible form
 > shows as garbage there. The orchestrator reads unmarked comments as a human
@@ -1208,7 +1252,7 @@ its PR — a claimed ticket with no open PR and no live agent is stranded, and
 this is the only place that shows it.
 
 ```bash
-for n in 1 2 3 4 5 6 7 8; do
+for n in $(seq 1 "${LO_SLOT_SCAN:-8}"); do
   p=$(cat ~/.claude/agents/agent-$n.lock 2>/dev/null)
   if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
     echo "agent-$n busy (pid $p) $(git -C ~/.claude/agents/agent-$n branch --show-current 2>/dev/null)"

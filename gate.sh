@@ -32,11 +32,33 @@ REPO="${LO_REPO:-/path/to/your/repo}"
 BASE="${LO_BASE:-dev}"
 TEAM="${LO_TEAM:-Your Team}"        # Linear team name
 PREFIX="${LO_PREFIX:-XXX}"          # ticket id prefix, e.g. HYR2
-TIER1="${LO_TIER1:-}"               # preferred assignee DISPLAY name (unassigned always eligible)
+TIER1="${LO_TIER1:-}"               # preferred assignee DISPLAY name
 TIER2="${LO_TIER2:-}"               # fallback assignee display name
+# Two opt-in widenings, both OFF by default. Unassigned and Backlog are work
+# nobody handed to this loop: somebody who moves a ticket to Todo and puts a
+# name on it has decided it is ready, and that decision is the whole signal.
+# Taking either without being asked is how an orchestrator starts work its owner
+# never queued — so each is a deliberate switch, not a default.
+ALLOW_UNASSIGNED="${LO_ALLOW_UNASSIGNED:-0}"  # 1 = unassigned tickets count too
+ALLOW_BACKLOG="${LO_ALLOW_BACKLOG:-0}"        # 1 = fall to Backlog when Todo is empty
+# Which PRs are THIS loop's. Every linear-orchestrator writes the same bare 🌙
+# marker, so on a repo with two of them running the marker cannot tell them
+# apart: each reads the other's PRs as its own and reviews, re-drafts and
+# answers feedback on them. LO_OWNER puts a per-instance tag in the marker and
+# the gate matches on that. Empty keeps the bare marker — correct only when a
+# single orchestrator touches the repo.
+OWNER="${LO_OWNER:-}"
+PR_MARKER="🌙${OWNER:+ lo:$OWNER}"
 RAM_PER_AGENT="${LO_RAM_PER_AGENT:-2.5}"
-# Hard ceiling on concurrent agents, whatever the RAM math allows.
-MAX_AGENTS_CAP="${LO_MAX_AGENTS:-4}"
+# Ceiling on concurrent agents. 0 = unlimited, and unlimited is the default: the
+# tick spawns every slot free RAM allows, so the loop reaches full capacity on
+# the first tick with work instead of climbing one agent at a time.
+MAX_AGENTS_CAP="${LO_MAX_AGENTS:-0}"
+# How many agent slots to probe for liveness. This must cover the most agents
+# that can run at once or a busy agent above the scan reads as a free slot and
+# the loop double-spawns onto it. Defaults to what total RAM allows, floor 8.
+SLOT_SCAN="${LO_SLOT_SCAN:-$(awk -v r="$(( $(sysctl -n hw.memsize) / 1073741824 ))" \
+  -v a="${LO_RAM_PER_AGENT:-2.5}" 'BEGIN{m=int(r/a); print (m<8?8:m)}')}"
 WAIT_INTERVAL="${LO_WAIT_INTERVAL:-60}"   # --wait: seconds between probes
 WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re-arm
 # Comments written before the loop started marking its own carry no marker, so
@@ -46,6 +68,37 @@ FEEDBACK_SINCE="${LO_FEEDBACK_SINCE:-2026-08-18T17:00:00Z}"
 # Whose comments count as feedback. Comma-separated GitHub logins, case
 # insensitive. Empty means every non-bot login counts.
 FEEDBACK_LOGINS="${LO_FEEDBACK_LOGINS:-}"
+
+# One Linear read, filtered to the tickets this instance is allowed to take.
+# $1 is the status TYPE, not the column name — `state:"Backlog"` also returns
+# every other backlog-type status (Planned, Ideas, To Discuss on some
+# workspaces), so this is a cheap shortlist and the model still filters to the
+# exact column before it spawns anything.
+#
+# Assignee is the separation between two orchestrators on one tracker: each
+# takes only its own tiers, so neither can claim the other's tickets. That is
+# why an empty tier is dropped rather than matched — an unset LO_TIER2 would
+# otherwise equal the empty assignee string and quietly re-admit every
+# unassigned ticket that ALLOW_UNASSIGNED is meant to gate.
+LINEAR_ERR=""
+linear_ids() {
+  local tj
+  tj=$("$AC" call linear list_issues \
+    --json "{\"team\":\"$TEAM\",\"state\":\"$1\",\"includeArchived\":false,\"fields\":[\"assignee\",\"archivedAt\",\"status\"]}" \
+    --text 2>/dev/null)
+  if [ -z "$tj" ]; then
+    LINEAR_ERR="linear query failed (token expired? claude mcp login linear)"
+    return 0
+  fi
+  printf '%s' "$tj" | jq -r --arg t1 "$TIER1" --arg t2 "$TIER2" \
+    --argjson unassigned "$([ "$ALLOW_UNASSIGNED" = 1 ] && echo true || echo false)" '
+    ([$t1, $t2] | map(select(. != null and . != ""))) as $tiers
+    | [ .issues[]?
+        | select(.archivedAt == null)
+        | (.assignee // "") as $a
+        | select( ($unassigned and $a == "") or ($tiers | index($a) != null) )
+        | .id ] | sort | join(",")' 2>/dev/null
+}
 
 STATE=~/.claude/linear-orchestrator/gate-state
 QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
@@ -81,7 +134,7 @@ probe() {
   fi
 
   # --- reap leaked dev servers from dead slots ---
-  for n in 1 2 3 4 5 6 7 8; do
+  for n in $(seq 1 "$SLOT_SCAN"); do
     p=$(cat ~/.claude/agents/agent-$n.lock 2>/dev/null)
     if [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; then
       pids=$(pgrep -f "/.claude/agents/agent-$n/" 2>/dev/null)
@@ -107,7 +160,7 @@ probe() {
   # instant an agent drafts its own PR and every re-arm spins on the same PR.
   busy=0
   live_branches=""
-  for n in 1 2 3 4 5 6 7 8; do
+  for n in $(seq 1 "$SLOT_SCAN"); do
     p=$(cat ~/.claude/agents/agent-$n.lock 2>/dev/null)
     if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
       busy=$((busy+1))
@@ -145,7 +198,10 @@ probe() {
   done
   inhand=$(printf '%s' "$inhand" | jq -Rsc '[ split("\n")[] | select(length>0) | tonumber ]')
 
-  max_agents=$(awk -v r=$ramgb -v a=$RAM_PER_AGENT -v c=$MAX_AGENTS_CAP 'BEGIN{m=int(r/a); print (m>c?c:m)}')
+  # c=0 is "no ceiling": total RAM is then the only bound on how many can run.
+  max_agents=$(awk -v r=$ramgb -v a=$RAM_PER_AGENT -v c=$MAX_AGENTS_CAP 'BEGIN{m=int(r/a); print (c>0 && m>c?c:m)}')
+  # What the ceiling is doing, in words, for the lines that report capacity.
+  if [ "$MAX_AGENTS_CAP" -gt 0 ] 2>/dev/null; then capnote=" (LO_MAX_AGENTS=$MAX_AGENTS_CAP)"; else capnote=" (uncapped)"; fi
   slots=$(awk -v m=$max_agents -v b=$busy -v f=$freegb -v a=$RAM_PER_AGENT -v l=$load \
               -v c=$cores -v d=$diskgb 'BEGIN{
     if (l > c*0.7 || d < 10) { print 0; exit }
@@ -169,10 +225,10 @@ probe() {
   # A broken gh is itself worth waking for — never wait quietly on it.
   [ -z "$prs" ] && { echo "GATE-ERROR: gh pr list failed"; return 0; }
 
-  verdicts=$(printf '%s' "$prs" | jq -c '[ .[] | {
+  verdicts=$(printf '%s' "$prs" | jq -c --arg m "$PR_MARKER" '[ .[] | {
       pr: .number, draft: .isDraft, merge: .mergeable, head: .headRefName,
       base: .baseRefName,
-      mine: ((.body // "") | test("🌙")),
+      mine: ((.body // "") | contains($m)),
       invalid: ([.labels[]?.name] | index("invalid") != null),
       # Only a real verdict counts. Three things look like one and are not:
       #   ""         a run still QUEUED or IN_PROGRESS. GitHub returns an empty
@@ -281,8 +337,9 @@ probe() {
   if [ "$(printf '%s' "$pending" | jq 'length')" -gt 0 ]; then
     # Only now is it worth asking which PRs are the loop's. --state all is what
     # reaches a merged PR; the 🌙 body test is what keeps a human's PR out.
-    minepr=$(gh pr list --repo "$slug" --state all --limit 100 --json number,body,state \
-      --jq '[ .[] | select((.body // "") | test("🌙")) | { pr: (.number|tostring), state } ]' 2>/dev/null)
+    minepr=$(gh pr list --repo "$slug" --state all --limit 100 --json number,body,state 2>/dev/null \
+      | jq -c --arg m "$PR_MARKER" '[ .[] | select((.body // "") | contains($m))
+          | { pr: (.number|tostring), state } ]')
     [ -z "$minepr" ] && minepr='[]'
     feedback=$(printf '%s' "$pending" | jq -c --argjson mine "$minepr" '[ .[]
       | .pr as $p | ($mine[] | select(.pr == $p)) as $m
@@ -300,20 +357,24 @@ probe() {
   # Cheap pre-filter (assignee tier + not archived); the model still applies the
   # judgment drop-rules and dedups against open PRs. New candidate -> hash change.
   todo_ids=""
+  todo_source=""
   if [ "$slots" -gt 0 ]; then
     if [ -x "$AC" ] || command -v "$AC" >/dev/null 2>&1; then
-      tj=$("$AC" call linear list_issues \
-        --json "{\"team\":\"$TEAM\",\"state\":\"Todo\",\"includeArchived\":false,\"fields\":[\"assignee\",\"archivedAt\",\"status\"]}" \
-        --text 2>/dev/null)
-      if [ -n "$tj" ]; then
-        todo_ids=$(printf '%s' "$tj" | jq -r --arg t1 "$TIER1" --arg t2 "$TIER2" '
-          [ .issues[]?
-            | select(.archivedAt == null)
-            | select(.assignee == null or .assignee == "" or .assignee == $t1 or .assignee == $t2)
-            | .id ] | sort | join(",")' 2>/dev/null)
-      else
-        notes="$notes${notes:+; }linear query failed (token expired? claude mcp login linear)"
+      LINEAR_ERR=""
+      todo_ids=$(linear_ids Todo)
+      [ -n "$todo_ids" ] && todo_source=Todo
+      # Backlog is opt-in AND strictly second. A Todo ticket outranks a Backlog
+      # one at any priority, because somebody deliberately moved it to Todo — so
+      # the fall happens only when Todo yields nothing eligible at all. Reading
+      # it here rather than leaving it to the model is what lets the gate WAKE
+      # on backlog-only work: the wake conditions below all need a non-empty
+      # candidate list, so a backlog pass the gate never saw could not run on an
+      # otherwise idle night.
+      if [ -z "$todo_ids" ] && [ "$ALLOW_BACKLOG" = 1 ] && [ -z "$LINEAR_ERR" ]; then
+        todo_ids=$(linear_ids Backlog)
+        [ -n "$todo_ids" ] && todo_source=Backlog
       fi
+      [ -n "$LINEAR_ERR" ] && notes="$notes${notes:+; }$LINEAR_ERR"
     else
       notes="$notes${notes:+; }agent-codemode CLI not found; Linear check skipped"
     fi
@@ -379,7 +440,7 @@ probe() {
       elif [ "$diskgb" -lt 10 ]; then
         why="disk ${diskgb}gb free, under 10"
       elif [ "$bycap" -le 0 ]; then
-        why="all $max_agents agent slots busy"
+        why="all $max_agents agent slots busy$capnote"
       else
         why="ram ${freegb}gb free, ${RAM_PER_AGENT}gb per agent, busy=$busy"
       fi
@@ -391,7 +452,10 @@ probe() {
     else
       why="slots=$slots, nothing to take"
       [ "$n_drafts" -eq 0 ] && why="$why; no drafts"
-      if [ -z "$todo_ids" ]; then why="$why; linear ready column empty"
+      if [ -z "$todo_ids" ]; then
+        why="$why; linear Todo empty for ${TIER1:-<no tier set>}"
+        [ "$ALLOW_UNASSIGNED" = 1 ] || why="$why, unassigned off"
+        [ "$ALLOW_BACKLOG" = 1 ] || why="$why, backlog off"
       elif [ "$hash" = "$prev" ]; then why="$why; same todo ids as last tick"; fi
     fi
     NOREASON="$why"
@@ -417,7 +481,7 @@ probe() {
   save_state "$hash"
 
   # --- otherwise: everything the model needs, nothing it does not ---
-  echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots"
+  echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots max=$max_agents$capnote"
   [ -n "$notes" ]           && echo "notes: $notes"
   [ "$hash" != "$prev" ]    && echo "world-changed: yes"
   [ "$n_regate"  -gt 0 ]    && echo "REGATE: $regate"
@@ -426,7 +490,7 @@ probe() {
   [ "$n_drafts"  -gt 0 ]    && echo "DRAFTS: $drafts"
   [ "$n_stack"   -gt 0 ]    && echo "STACK: $stack"
   [ "$n_restack" -gt 0 ]    && echo "RESTACK: $restack"
-  [ "$slots" -gt 0 ] && [ -n "$todo_ids" ] && echo "TODO-CANDIDATES: $todo_ids"
+  [ "$slots" -gt 0 ] && [ -n "$todo_ids" ] && echo "TODO-CANDIDATES: $todo_ids (from ${todo_source:-Todo})"
   [ "$queue_stale" = yes ]  && echo "queue: stale, rebuild before 2d"
   return 0
 }

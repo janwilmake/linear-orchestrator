@@ -125,17 +125,37 @@ LO_REPO="/path/to/your/repo"   # local checkout the agents clone from
 LO_BASE="dev"                  # base branch
 LO_TEAM="Your Team"            # Linear team name
 LO_PREFIX="ENG"                # ticket id prefix
-LO_TIER1="Preferred Assignee"  # display name; unassigned is always eligible
+LO_TIER1="Preferred Assignee"  # display name. ONLY these assignees are taken
 LO_TIER2="Fallback Assignee"   # display name
+LO_ALLOW_UNASSIGNED="0"        # 1 = also take unassigned tickets (default off)
+LO_ALLOW_BACKLOG="0"           # 1 = fall to Backlog when Todo is empty (default off)
+LO_OWNER=""                    # this instance's tag; required if two share a repo
 LO_RAM_PER_AGENT="2.5"         # GB per agent (claude + vite + chrome)
-LO_MAX_AGENTS="4"              # hard ceiling on concurrent agents
+LO_MAX_AGENTS="0"              # ceiling on concurrent agents; 0 = unlimited
 LO_FEEDBACK_SINCE="2026-08-18T17:00:00Z"   # the day you installed this
 ```
 
 `LO_RAM_PER_AGENT` is the one people get wrong: it is a divisor, not a threshold.
-Every tick spawns `free memory / LO_RAM_PER_AGENT` agents. The default assumes one
-Claude session, one dev server and one Chrome — a stack with Docker or a local
-database costs far more, and the probe cannot detect that.
+Every tick spawns `free memory / LO_RAM_PER_AGENT` agents — all of them, not one,
+so the loop reaches full capacity on its first tick with work. `LO_MAX_AGENTS`
+defaults to `0`, meaning memory is the only ceiling; set a positive number to
+hold part of the machine back. The default divisor assumes one Claude session,
+one dev server and one Chrome — a stack with Docker or a local database costs far
+more, and the probe cannot detect that.
+
+**What it takes is narrow on purpose.** Only tickets in `Todo` assigned to
+`LO_TIER1` or `LO_TIER2`. Unassigned tickets and the `Backlog` column are each
+one switch away (`LO_ALLOW_UNASSIGNED`, `LO_ALLOW_BACKLOG`) and both default to
+off — a name on a ticket in a ready column is somebody deciding it is ready, and
+that decision is the signal the loop runs on.
+
+**Running two orchestrators against one repo** — say one per laptop — needs
+`LO_OWNER` set to a different tag in each. Splitting by assignee separates them
+on the tracker, but not on GitHub: every instance writes the same `🌙` marker,
+and that marker is what decides which PRs a loop reviews, promotes and answers
+comments on. With `LO_OWNER` the marker becomes `🌙 lo:<owner>` and the two stop
+overlapping. Both instances must run this version for the split to hold — an
+older one matches the bare marker and still adopts everything.
 
 Both `gate.sh` and the tick read these, so there is nothing to edit inside
 `SKILL.md`.
