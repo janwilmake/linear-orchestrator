@@ -1002,6 +1002,19 @@ true only here:
 > Other agents are running dev servers, so take a free port in 5200–5299 and
 > point `VITE_BASE_URL` at it.
 >
+> **Open your own Chrome window before your first browser call, or do not resize
+> anything.** `resize_window` acts on the **window** that holds the tab, so
+> resizing from a tab in the user's window squashes every tab they have open.
+> Open one and keep the id it returns: `osascript -e 'tell application "Google
+> Chrome" to activate' -e 'tell application "Google Chrome" to id of (make new
+> window)'`, then `tabs_context_mcp` with `createIfEmpty: true` puts your group
+> in it. That placement only works while no group exists, so it has to be the
+> first browser thing you do — once you have made any browser call, close every
+> tab of the group with `tabs_close_mcp` (the group goes with its last tab) and
+> create it again. Confirm before you resize: `get id of every tab of window id
+> <id>` must list the tab you are testing. If you did not open a window, never
+> call `resize_window` at all.
+>
 > **You do not review your own work, and you do not fix a review.** Stop once the
 > draft PR is open and your commits are pushed: the orchestrator then dispatches a
 > separate agent, in a fresh context, to review this diff and to fix what that
@@ -1012,12 +1025,16 @@ true only here:
 >
 > Finally comment the PR link on the ticket, leave it In Progress, and stop.
 >
-> **Before you stop, clean up after yourself.** Close every Chrome tab you
-> opened — nobody else can: tabs are scoped to your own MCP session, so a tab
-> you leave behind outlives you and cannot be closed by the orchestrator or by
-> another agent. Then stop the dev server you started. Do this as the last thing
-> you do, after the PR is in its final state, so a failure here cannot cost you
-> the work.
+> **Before you stop, clean up after yourself.** Close the window you opened —
+> `osascript -e 'tell application "Google Chrome" to close window id <id>'` —
+> and its tabs go with it. Close every tab you opened outside that window with
+> `tabs_close_mcp`; nobody else can, because tabs are scoped to your own MCP
+> session, so a tab you leave behind outlives you and cannot be closed by the
+> orchestrator or by another agent. Then read back the `bounds` of any window
+> you did not open and put back anything that changed — you should never have
+> resized one, so check rather than assume. Then stop the dev server you
+> started. Do this as the last thing you do, after the PR is in its final state,
+> so a failure here cannot cost you the work.
 
 Write the prompt with the settings resolved, as above — the agent has no copy
 of this table. Pass `gitBranchName` verbatim from the tracker rather than
@@ -1049,11 +1066,14 @@ commit a1b2c3d, 6 of 6`). A blank line under the `<summary>` line, or the
 markdown inside comes out raw. The reader should be able to scroll a PR and see
 only the human voices.
 
-**All five end with the same teardown, and it is not optional:** close every
-Chrome tab you opened and stop the dev server you started, as the last thing you
-do. Tabs are scoped per MCP session, so a tab an agent abandons cannot be closed
-by the orchestrator or by any other agent — it simply sits there until Chrome
-quits. The dev server is worse: it is a detached `npm exec` child, so it
+**All five end with the same teardown, and it is not optional:** close the
+window you opened — `close window id <id>`, and its tabs go with it — close any
+tab opened outside it with `tabs_close_mcp`, put back the `bounds` of any window
+the agent did not open, and stop the dev server, as the last thing they do.
+Tabs are scoped per MCP session, so a tab an agent abandons cannot be closed by
+the orchestrator or by any other agent — it simply sits there until Chrome
+quits. A window it abandons stays resized, which the user sees immediately. The
+dev server is quieter and costs more: it is a detached `npm exec` child, so it
 survives the agent's own session and holds 150–200 MB that the capacity gate
 never sees. The reaper only catches an agent that dies before its teardown; if you finish normally, do this yourself.
 
