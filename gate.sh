@@ -371,17 +371,21 @@ probe() {
   # (2026-08-31). Pending is tiny, so verify each candidate against ITS OWN
   # PR's comments, where the ack lives and cannot be crowded out.
   if [ "$(printf '%s' "$pending" | jq 'length')" -gt 0 ]; then
-    verified='[]'
-    for row in $(printf '%s' "$pending" | jq -c '.[]'); do
-      vid=$(printf '%s' "$row" | jq -r '.id')
-      vpr=$(printf '%s' "$row" | jq -r '.pr')
+    # id:pr pairs carry no spaces, so the for-loop word-split is safe — the
+    # first version iterated whole JSON rows, and comment bodies shattered.
+    ackdrop=""
+    for pair in $(printf '%s' "$pending" | jq -r '.[] | "\(.id):\(.pr)"'); do
+      vid=${pair%%:*}; vpr=${pair##*:}
       if gh api "repos/$slug/issues/$vpr/comments?per_page=100" \
            --jq '.[].body' 2>/dev/null | grep -q "ack:$vid"; then
-        continue
+        ackdrop="$ackdrop $vid"
       fi
-      verified=$(printf '%s' "$verified" | jq -c --argjson r "$row" '. + [$r]')
     done
-    pending="$verified"
+    if [ -n "$ackdrop" ]; then
+      pending=$(printf '%s' "$pending" | jq -c --arg drop "$ackdrop" \
+        '($drop | split(" ") | map(select(length>0))) as $d
+         | [ .[] | select((.id|tostring) as $i | ($d | index($i)) | not) ]')
+    fi
   fi
 
   feedback='[]'
