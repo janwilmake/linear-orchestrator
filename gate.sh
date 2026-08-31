@@ -294,8 +294,15 @@ probe() {
   # like any other draft, but the model cannot review a stack in an arbitrary
   # order — layer 2 is unreadable before layer 1 — so name the base here and let
   # it sort them bottom-up.
-  stack=$(printf '%s' "$verdicts" | jq -c --arg b "$BASE" '[ .[]
-            | select(.mine and .base != $b)
+  # A stack BOTTOM (base == $BASE) belongs here too: GitHub's update-branch
+  # endpoint answers 403 on gh-stack PRs, so the auto-update pass above cannot
+  # refresh it, and with the strict up-to-date rule on (31 Aug) a bottom behind
+  # $BASE blocks its whole stack while every per-PR signal reads green. Including
+  # it hands the RESTACK sweep below a dev...bottom compare, which is the only
+  # thing that notices.
+  stack=$(printf '%s' "$verdicts" | jq -c --arg b "$BASE" '. as $all | [ .[]
+            | select(.mine)
+            | select(.base != $b or (.head as $h | ($all | map(select(.base == $h)) | length) > 0))
             | {pr, base, draft, head} ]')
 
   # A layer goes stale the moment its base layer takes a commit — and NOTHING
