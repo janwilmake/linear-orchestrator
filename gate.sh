@@ -424,12 +424,19 @@ probe() {
 
   feedback='[]'
   if [ "$(printf '%s' "$pending" | jq 'length')" -gt 0 ]; then
-    # Only now is it worth asking which PRs are the loop's. --state all is what
-    # reaches a merged PR; the 🌙 body test is what keeps a human's PR out.
-    minepr=$(gh pr list --repo "$slug" --state all --limit 100 --json number,body,state 2>/dev/null \
-      | jq -c --arg m "$PR_MARKER" '[ .[] | select((.body // "") | contains($m))
-          | { pr: (.number|tostring), state } ]')
-    [ -z "$minepr" ] && minepr='[]'
+    # Only now is it worth asking which PRs are the loop's. Ask per PR, not via
+    # a newest-100 page: a review on an old PR joined against that page matched
+    # nothing and was dropped without a trace — Studioraodev's blocker review on
+    # #964 sat unanswered for hours that way (31 Aug). Pending is tiny, so one
+    # `gh pr view` per unique PR is cheap, reaches merged PRs, and the 🌙 body
+    # test still keeps a human's own PR out.
+    minepr='[]'
+    for vpr in $(printf '%s' "$pending" | jq -r '[.[].pr] | unique | .[]'); do
+      row=$(gh pr view "$vpr" --repo "$slug" --json number,body,state 2>/dev/null \
+        | jq -c --arg m "$PR_MARKER" 'select((.body // "") | contains($m))
+            | { pr: (.number|tostring), state }')
+      [ -n "$row" ] && minepr=$(printf '%s' "$minepr" | jq -c --argjson r "$row" '. + [$r]')
+    done
     feedback=$(printf '%s' "$pending" | jq -c --argjson mine "$minepr" '[ .[]
       | .pr as $p | ($mine[] | select(.pr == $p)) as $m
       | { pr: ($p|tonumber), id, who, kind: (.kind // "comment"), state: $m.state } ]')
