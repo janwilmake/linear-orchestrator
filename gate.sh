@@ -68,6 +68,10 @@ FEEDBACK_SINCE="${LO_FEEDBACK_SINCE:-2026-08-18T17:00:00Z}"
 # Whose comments count as feedback. Comma-separated GitHub logins, case
 # insensitive. Empty means every non-bot login counts.
 FEEDBACK_LOGINS="${LO_FEEDBACK_LOGINS:-}"
+# Spawn ceiling as a fraction of cores: refuse new agents when load1 exceeds
+# cores*this. 0.7 was the conservative default; agents are mostly think-bound,
+# so 1.0 trades transient build slowdown for throughput. RAM stays the bound.
+LOAD_FACTOR="${LO_LOAD_FACTOR:-0.7}"
 
 # One Linear read, filtered to the tickets this instance is allowed to take.
 # $1 is the status TYPE, not the column name — `state:"Backlog"` also returns
@@ -203,8 +207,8 @@ probe() {
   # What the ceiling is doing, in words, for the lines that report capacity.
   if [ "$MAX_AGENTS_CAP" -gt 0 ] 2>/dev/null; then capnote=" (LO_MAX_AGENTS=$MAX_AGENTS_CAP)"; else capnote=" (uncapped)"; fi
   slots=$(awk -v m=$max_agents -v b=$busy -v f=$freegb -v a=$RAM_PER_AGENT -v l=$load \
-              -v c=$cores -v d=$diskgb 'BEGIN{
-    if (l > c*0.7 || d < 10) { print 0; exit }
+              -v c=$cores -v d=$diskgb -v lf=$LOAD_FACTOR 'BEGIN{
+    if (l > c*lf || d < 10) { print 0; exit }
     byram = int(f/a); bycap = m-b; s = (byram<bycap?byram:bycap)
     print (s<0?0:s) }')
 
@@ -531,8 +535,8 @@ probe() {
     # No extra calls: every number below is already measured above.
     if [ "$slots" -eq 0 ]; then
       bycap=$(( max_agents - busy ))
-      if awk -v l=$load -v c=$cores 'BEGIN{exit !(l > c*0.7)}'; then
-        why="load $load over $(awk -v c=$cores 'BEGIN{printf "%.1f", c*0.7}')"
+      if awk -v l=$load -v c=$cores -v lf=$LOAD_FACTOR 'BEGIN{exit !(l > c*lf)}'; then
+        why="load $load over $(awk -v c=$cores -v lf=$LOAD_FACTOR 'BEGIN{printf "%.1f", c*lf}')"
       elif [ "$diskgb" -lt 10 ]; then
         why="disk ${diskgb}gb free, under 10"
       elif [ "$bycap" -le 0 ]; then
