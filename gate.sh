@@ -248,6 +248,33 @@ probe() {
               elif ([ $c[] | select(.conclusion != "SUCCESS") ] | length) > 0 then "failing"
               else "green" end ) } ] | map(select(.base != "main")) | sort_by(.pr)')
 
+  # --- auto-update: merge $BASE into promoted PRs server-side when it moves ---
+  # Asked for on 31 Aug: when dev advances, refresh every promoted PR that still
+  # merges cleanly, so green means green-on-current-dev without claiming an
+  # agent slot. GitHub's update-branch endpoint does the merge server-side and
+  # answers 422 on a conflict or an already-current branch — conflicts keep
+  # flowing to REGATE as before. Two guards matter:
+  #   - never touch a PR an agent holds: a server-side merge commit under an
+  #     agent's feet turns its next push into a non-fast-forward failure.
+  #   - capped per pass, to bound the CI burst a dev merge wave triggers.
+  # --peek skips the whole pass: a look must not write to the forge.
+  tipfile=~/.claude/linear-orchestrator/dev-tip
+  tip=$(gh api "repos/$slug/commits/$BASE" --jq '.sha' 2>/dev/null)
+  prevtip=$(cat "$tipfile" 2>/dev/null)
+  if [ "$PEEK" != 1 ] && [ -n "$tip" ]; then
+    if [ -n "$prevtip" ] && [ "$tip" != "$prevtip" ]; then
+      updated=0
+      for p in $(printf '%s' "$verdicts" | jq -r --arg b "$BASE" --argjson held "$held" --argjson inhand "$inhand" \
+          '.[] | select(.draft==false and .mine and .base==$b and .merge!="CONFLICTING")
+               | .pr as $p | select($inhand | index($p) | not)
+               | .head as $h | select($held | index($h) | not) | .pr' 2>/dev/null | head -15); do
+        gh api -X PUT "repos/$slug/pulls/$p/update-branch" >/dev/null 2>&1 && updated=$((updated+1))
+      done
+      [ "$updated" -gt 0 ] && notes="$notes${notes:+; }auto-updated $updated promoted pr(s) after $BASE moved"
+    fi
+    printf '%s' "$tip" > "$tipfile"
+  fi
+
   regate=$(printf '%s' "$verdicts" | jq -c --argjson held "$held" --argjson inhand "$inhand" '[ .[]
             | select(.draft==false and .mine)
             | select(.merge=="CONFLICTING" or .ci=="failing")

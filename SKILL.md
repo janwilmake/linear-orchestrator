@@ -292,6 +292,16 @@ sitting mid-rebase in the tree they are working in. An agent has its own clone a
 its own context, and can abort without costing anyone anything. See the
 **restack** prompt.
 
+**The gate auto-refreshes promoted PRs when `BASE_BRANCH` moves.** Each probe
+compares the remote base tip against the one it last saw. When it moved, the
+gate calls GitHub's update-branch endpoint on every promoted loop PR based on
+that branch — a server-side merge of the base into the PR, no agent, no clone.
+A PR that no longer merges cleanly is refused with a 422 and reaches `REGATE`
+as before; a PR an agent holds is skipped, because a server-side merge commit
+under an agent's feet turns its next push into a non-fast-forward failure. The
+pass is capped per probe to bound the CI burst, and `--peek` never runs it. The
+`notes` line reports `auto-updated N promoted pr(s)` when it fires.
+
 `FEEDBACK` and `REGATE` are work at any slot count, because an ack, a re-draft
 and a follow-up ticket need no agent — only the rework behind them does.
 
