@@ -333,6 +333,38 @@ probe() {
             | select(($who | length) == 0 or ((.who | ascii_downcase) as $w | $who | index($w) != null))
             | .id as $i | select($acked | index($i) | not) ]')
 
+  # SUBMITTED REVIEWS are a second human surface the comments endpoint never
+  # returns: a review submitted from the Files-changed tab is not an issue
+  # comment, so a reviewer can write twenty of them and the loop sees nothing.
+  # Seen on a real run (2026-08-31): 29 reviews in one morning, zero surfaced.
+  # There is no repo-wide reviews endpoint, so one GraphQL query sweeps the 100
+  # most recently updated open+merged PRs and their last 10 reviews each.
+  # A review by the loop cannot exist — agents post plain comments by rule — so
+  # the 🌙 test is only a guard. Acks reuse the same ack:<id> comment mechanism
+  # (review ids and comment ids are both numeric and never collide in practice).
+  # FEEDBACK entries from here carry kind:"review": the tick reads the body via
+  # `gh api repos/<slug>/pulls/<pr>/reviews/<id>`, not the comments endpoint.
+  rowner=${slug%%/*}; rname=${slug##*/}
+  rpending=$(gh api graphql \
+    -f owner="$rowner" -f name="$rname" \
+    -f query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){pullRequests(states:[OPEN,MERGED],first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number reviews(last:10){nodes{databaseId submittedAt bodyText author{login __typename}}}}}}}' \
+    --jq '.data.repository.pullRequests.nodes' 2>/dev/null)
+  [ -z "$rpending" ] && rpending='[]'
+  rpending=$(printf '%s' "$rpending" | jq -c --argjson acked "$acked" \
+      --arg allow "$FEEDBACK_LOGINS" --arg since "$since" '
+      ($allow | ascii_downcase | split(",") | map(sub("^ +";"") | sub(" +$";""))
+        | map(select(length > 0))) as $who
+      | [ .[] | .number as $n | .reviews.nodes[]?
+      | select((.bodyText // "") != "")
+      | select(.author != null and .author.__typename != "Bot")
+      | select(.submittedAt >= $since)
+      | select((.bodyText | test("🌙")) | not)
+      | select(($who | length) == 0 or ((.author.login | ascii_downcase) as $w | $who | index($w) != null))
+      | .databaseId as $i | select($acked | index($i) | not)
+      | { id: $i, who: .author.login, pr: ($n|tostring), kind: "review" } ]' 2>/dev/null)
+  [ -z "$rpending" ] && rpending='[]'
+  pending=$(jq -c -n --argjson a "$pending" --argjson b "$rpending" '$a + $b')
+
   feedback='[]'
   if [ "$(printf '%s' "$pending" | jq 'length')" -gt 0 ]; then
     # Only now is it worth asking which PRs are the loop's. --state all is what
@@ -343,7 +375,7 @@ probe() {
     [ -z "$minepr" ] && minepr='[]'
     feedback=$(printf '%s' "$pending" | jq -c --argjson mine "$minepr" '[ .[]
       | .pr as $p | ($mine[] | select(.pr == $p)) as $m
-      | { pr: ($p|tonumber), id, who, state: $m.state } ]')
+      | { pr: ($p|tonumber), id, who, kind: (.kind // "comment"), state: $m.state } ]')
   fi
   n_feedback=$(printf '%s' "$feedback" | jq 'length')
 

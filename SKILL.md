@@ -399,6 +399,13 @@ Take the entries oldest comment first. Read the comment
 (`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body`), then route it on
 the PR state the gate reported:
 
+**An entry with `kind: "review"` is a submitted PR review, not an issue
+comment** — a second surface the comments endpoint never returns, swept by the
+gate through one GraphQL query. Read its body with
+`gh api repos/<owner>/<repo>/pulls/<pr>/reviews/<id> --jq .body`, then route it
+exactly like a comment, ack id and all — the `ack:<id>` reply mechanism is
+shared, and review ids are numeric like comment ids.
+
 1. **`OPEN`** — treat it exactly like a label. Re-draft the PR
    (`gh pr ready --undo <PR#>`), ack with what you understood and what happens
    next, and dispatch the rework with the comment **quoted verbatim** in the
