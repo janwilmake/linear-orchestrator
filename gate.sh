@@ -365,6 +365,25 @@ probe() {
   [ -z "$rpending" ] && rpending='[]'
   pending=$(jq -c -n --argjson a "$pending" --argjson b "$rpending" '$a + $b')
 
+  # The acked-scan above reads ONE page of the newest repo-wide comments. On a
+  # busy day the loop writes hundreds, so an ack posted hours ago rolls off the
+  # page and its review resurfaces as unanswered — seen flapping on a real run
+  # (2026-08-31). Pending is tiny, so verify each candidate against ITS OWN
+  # PR's comments, where the ack lives and cannot be crowded out.
+  if [ "$(printf '%s' "$pending" | jq 'length')" -gt 0 ]; then
+    verified='[]'
+    for row in $(printf '%s' "$pending" | jq -c '.[]'); do
+      vid=$(printf '%s' "$row" | jq -r '.id')
+      vpr=$(printf '%s' "$row" | jq -r '.pr')
+      if gh api "repos/$slug/issues/$vpr/comments?per_page=100" \
+           --jq '.[].body' 2>/dev/null | grep -q "ack:$vid"; then
+        continue
+      fi
+      verified=$(printf '%s' "$verified" | jq -c --argjson r "$row" '. + [$r]')
+    done
+    pending="$verified"
+  fi
+
   feedback='[]'
   if [ "$(printf '%s' "$pending" | jq 'length')" -gt 0 ]; then
     # Only now is it worth asking which PRs are the loop's. --state all is what
