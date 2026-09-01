@@ -224,10 +224,20 @@ probe() {
   # gate — it would sit open and unreviewed until a human found it by hand.
   # `.mine` below is what keeps this to the loop's own PRs, and `main` is
   # excluded so a release PR is never mistaken for work.
-  prs=$(gh pr list --repo "$slug" --state open --limit 100 \
+  # `gh pr list` returns newest first, so a limit that binds silently drops the
+  # OLDEST open PRs, and an invisible PR is absent from REGATE, DRAFTS and
+  # RESTACK alike — which reads exactly like a clean board.
+  PR_LIMIT="${LO_PR_LIMIT:-400}"
+  prs=$(gh pr list --repo "$slug" --state open --limit "$PR_LIMIT" \
     --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>/dev/null)
   # A broken gh is itself worth waking for — never wait quietly on it.
   [ -z "$prs" ] && { echo "GATE-ERROR: gh pr list failed"; return 0; }
+
+  # And say so if it ever binds again, rather than truncating quietly.
+  pr_count=$(printf '%s' "$prs" | jq 'length')
+  if [ "$pr_count" -ge "$PR_LIMIT" ]; then
+    echo "GATE-WARN: open PRs hit the query limit ($pr_count >= $PR_LIMIT) — the oldest are invisible. Raise LO_PR_LIMIT."
+  fi
 
   verdicts=$(printf '%s' "$prs" | jq -c --arg m "$PR_MARKER" '[ .[] | {
       pr: .number, draft: .isDraft, merge: .mergeable, head: .headRefName,
