@@ -1,4 +1,4 @@
-# Linear Orchestrator
+# 🎼 Linear Orchestrator
 
 **Tickets in. Reviewed pull requests out. Nobody watching.**
 

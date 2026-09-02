@@ -446,7 +446,7 @@ it already has overrides what it correctly knew.
 >
 > **The body ends with the loop's own footer, not the harness's.** Replace the
 > `🤖 Generated with [Claude Code](…)` line the harness asks for with:
-> `🤖 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](<session URL>)`
+> `🎼 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](<session URL>)`
 > — the session URL is the `https://claude.ai/code/session_…` link the harness
 > hands your session; when it gave you none, drop the second half. Keep the
 > `Claude-Session:` git trailer as it is.
@@ -568,7 +568,7 @@ else: no features, no bug fixes.
   after your fix pass, and re-grade **Risk / rollback**'s word if the review
   found a blocker. Keep every title summary within its word budget.
   The body's last line is the loop footer —
-  `🤖 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](…)`
+  `🎼 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](…)`
   — so replace a bare `Generated with Claude Code` line with it, keeping the
   author's session link.
 
