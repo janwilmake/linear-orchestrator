@@ -444,6 +444,13 @@ it already has overrides what it correctly knew.
 > (drop ` lo:<OWNER>` when it is empty). A PR without the tag is invisible to its
 > own loop; one with the wrong tag gets reviewed by the wrong machine.
 >
+> **The body ends with the loop's own footer, not the harness's.** Replace the
+> `🤖 Generated with [Claude Code](…)` line the harness asks for with:
+> `🤖 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](<session URL>)`
+> — the session URL is the `https://claude.ai/code/session_…` link the harness
+> hands your session; when it gave you none, drop the second half. Keep the
+> `Claude-Session:` git trailer as it is.
+>
 > **Start every PR comment with the marker line, and every Linear comment with a
 > visible `🌙`** — the orchestrator answers unmarked comments as if a person
 > wrote them.
@@ -560,6 +567,10 @@ else: no features, no bug fixes.
   another open PR on the same call site. Recount **Decisions** and **Out of scope**
   after your fix pass, and re-grade **Risk / rollback**'s word if the review
   found a blocker. Keep every title summary within its word budget.
+  The body's last line is the loop footer —
+  `🤖 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](…)`
+  — so replace a bare `Generated with Claude Code` line with it, keeping the
+  author's session link.
 
 **needs-fix** — a review is already there. Say where to read it
 (`gh pr view <PR#> --json comments`, or
