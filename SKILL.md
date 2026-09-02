@@ -405,23 +405,36 @@ it already has overrides what it correctly knew.
 > Then **keep the body current as you go** (`gh pr edit <PR#> --body-file`); by
 > the time you stop it must satisfy the PR template and the repo's PR skills.
 >
-> **The body opens with a verdict line and a Review at a glance table**, under
-> the marker and above every collapsed section. The verdict is one blockquoted
-> line saying what the reader should *do* — `✅ Safe to merge alone.` /
-> `⚠️ Merge order matters — merge this before #NNNN.` / `🛑 Needs your decision
-> first.` Then this table, **the same eight rows in the same order on every PR**,
-> `None` or `No` where a row does not apply:
+> **The body opens with the PR at a glance**, under the marker and above every
+> collapsed section — three things, nothing else:
 >
-> | row | holds |
+> 1. **One line on merge order and related PRs**, linking them: `⚠️ Merge after
+>    #NNNN — it rewrites the file this deletes.` / `Related: #NNNN.` / `✅ Merges
+>    alone.` Nothing else surfaces this, so it is the one line that must be right.
+> 2. **At most one screenshot**, the after shot from Solution, when a user can see
+>    the change. Nothing when they cannot.
+> 3. **The collapsed sections, each with a summary in parentheses after its
+>    title** — the titles are the table now. Same headings, same order, on every
+>    PR:
+>
+> | section | after the title |
 > | --- | --- |
-> | **Irreversible parts** | What a revert cannot undo: a dropped column, deleted rows, a sent message, a changed public URL. |
-> | **Blocked on a person** | `No`, or what they must decide. |
-> | **Merge alongside** | Other PRs claiming the same call site, contradicting this one, or that must land first. Nothing else surfaces this. |
-> | **The one real risk** | One specific sentence naming where to look. "Low risk" is not one. |
-> | **What a user sees change** | Usually `Nothing`. |
-> | **Evidence strength** | Whether the tests were **proven to fail without the fix**, not that they pass. |
-> | **Schema / migration** | `None`, or what it does and whether the destructive half is parked. |
-> | **Size** | Files and ±lines, last. |
+> | **Problem** | 1–5 words on what is wrong |
+> | **Solution** | 1–5 words on what changes |
+> | **Background** | nothing |
+> | **Tested by AI** | nothing |
+> | **Post-merge runbook** | 1–5 words, or `nothing` |
+> | **Decisions** | the count, `(N)` |
+> | **Out of scope & Suggestions** | the count, `(N)` |
+> | **Needs human verification** | `Nothing`, or 1–3 words naming it |
+> | **Risk / rollback** | `Low` / `Moderate` / `High`, plus at most 3 words |
+> | **Checklist** | nothing |
+>
+> So: `<details><summary><b>Problem</b> (note-taker calls name the recruiter)</summary>`.
+> No table above the sections, no verdict paragraph, no row per risk — a reader
+> gets the PR from the merge line, the shot and the ten titles. Irreversible
+> parts, schema changes and what a user sees go in the Risk / rollback and
+> Solution bodies, and their titles say how bad.
 >
 > Never use a file or line count as a risk proxy.
 >
@@ -542,11 +555,11 @@ else: no features, no bug fixes.
   `## Decisions`, but **delete Decisions entries that record no choice**. Fix the
   shape too: every section collapsed, blank line under each `<summary>`,
   screenshots in Problem and Solution rather than a `## Screenshots` section.
-* **The verdict line and the glance table are yours to correct** — the author
-  wrote them before the review existed. A PR whose review found a blocker is not
-  `✅ Safe to merge alone`. **Evidence strength** says whether *you* proved the
-  tests fail without the fix. **Merge alongside** is the row most often wrong:
-  check for another open PR on the same call site.
+* **The at-a-glance lines are yours to correct** — the author wrote them before
+  the review existed. The merge-order line is the one most often wrong: check for
+  another open PR on the same call site. Recount **Decisions** and **Out of scope**
+  after your fix pass, and re-grade **Risk / rollback**'s word if the review
+  found a blocker. Keep every title summary within its word budget.
 
 **needs-fix** — a review is already there. Say where to read it
 (`gh pr view <PR#> --json comments`, or

@@ -299,10 +299,15 @@ probe() {
   invalid=$(printf '%s' "$verdicts" | jq -c '[ .[] | select(.invalid and .mine) | .pr ]')
   # .mine matters as much as $held here: a human's draft PR is not the loop's to
   # push commits to.
-  drafts=$(printf '%s' "$verdicts" | jq -c --argjson held "$held" --argjson inhand "$inhand" '[ .[]
+  # A layer whose base is itself an unpromoted draft is not work: 2c promotes a
+  # stack bottom-up, so the model declines it every time and the wake is spent.
+  # Seen on 1 Sep: #1088 sat behind #1082 and woke the waiter six times in three
+  # minutes, each wake a model turn that decided nothing.
+  drafts=$(printf '%s' "$verdicts" | jq -c --argjson held "$held" --argjson inhand "$inhand" '. as $all | [ .[]
             | select(.draft and .mine)
             | .pr as $p | select($inhand | index($p) | not)
-            | .head as $h | select($held | index($h) | not) | .pr ]')
+            | .head as $h | select($held | index($h) | not)
+            | select(.base as $b | ($all | map(select(.head == $b and .draft)) | length) == 0) | .pr ]')
 
   # A layer whose base is another branch is part of a stack. It appears in DRAFTS
   # like any other draft, but the model cannot review a stack in an arbitrary
