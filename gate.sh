@@ -363,6 +363,20 @@ probe() {
   restack="[]"
   if [ "$(printf '%s' "$stack" | jq 'length')" -gt 0 ]; then
     restack=$(printf '%s' "$stack" | jq -c '.[] | [.pr, .base, .head] | @tsv' -r | while IFS=$'\t' read -r p b h; do
+      # A stack BOTTOM is behind the trunk constantly — the trunk moves all day — and that
+      # only blocks a merge where the strict up-to-date rule is on. GitHub says so itself:
+      # `mergeStateStatus` reads BEHIND exactly then, and CLEAN when being behind costs
+      # nothing. Without this the bottom of every stack sits on RESTACK forever and the
+      # waiter wakes the loop on it every probe, which is what it did.
+      #
+      # Asked per bottom rather than in the bulk list above: `mergeStateStatus` computes
+      # mergeability, and adding it to a 400-PR query answers
+      # "Resource limits for this query exceeded". A stack is rare, so this costs nothing
+      # on the common probe.
+      if [ "$b" = "$BASE" ]; then
+        ms=$(gh pr view "$p" --repo "$slug" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null)
+        [ "$ms" = "BEHIND" ] || continue
+      fi
       cmp=$(gh api "repos/$slug/compare/$b...$h" --jq '.behind_by' 2>/dev/null)
       # A non-numeric answer is a failed lookup, and [ -gt ] returns false for it
       # rather than treating it as a number. `case` cannot be used here: bash
