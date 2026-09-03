@@ -106,6 +106,12 @@ linear_ids() {
 }
 
 STATE=~/.claude/linear-orchestrator/gate-state
+# The drafts fingerprint lives apart from the main hash on purpose. The main
+# hash covers the whole world, so anything at all moving it — an agent pushing
+# a commit on an unrelated branch, CI starting on somebody else's PR — makes
+# every open draft look new again. A draft is only work when something about
+# THAT draft moved.
+DSTATE=~/.claude/linear-orchestrator/gate-drafts-state
 QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
@@ -116,6 +122,9 @@ PEEK=0
 # Every state write goes through here. --peek makes it a no-op, so a look never
 # moves the world forward for the waiter that is watching it.
 save_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$STATE"; }
+# Written from the same places as save_state, so the two never drift: a probe
+# the model did not see must move neither of them.
+save_drafts_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$DSTATE"; }
 NOREASON=""
 
 # probe: measure the world once. Prints the context block and returns 0 when
@@ -563,6 +572,16 @@ probe() {
   hash=$(printf '%s|%s|%s' "$verdicts" "$todo_ids" "$feedback" | shasum | cut -c1-16)
   prev=$(cat "$STATE" 2>/dev/null)
 
+  # A fingerprint of the DRAFTS only, so a draft wakes the loop when something
+  # about that draft moved and not when the world moved around it. It carries
+  # the verdict fields a draft is judged on, not just the numbers: a draft whose
+  # CI turned green or whose `mergeable` flipped must still wake, or a PR that
+  # became promotable would sit unnoticed until the next unrelated change.
+  draftsig=$(printf '%s' "$verdicts" | jq -Sc --argjson d "$drafts" \
+      '[ .[] | select(.pr as $p | $d | index($p)) | {pr,draft,merge,ci,base} ]' \
+      2>/dev/null | shasum | cut -c1-16)
+  prevdrafts=$(cat "$DSTATE" 2>/dev/null)
+
   # --- decide ---
   work=no
   [ "$n_regate"  -gt 0 ] && work=yes            # acted on even at slots 0
@@ -579,7 +598,7 @@ probe() {
   # full forge-reading probe back to back. Seen for real on HYR2-1339's stack:
   # a held draft woke the waiter roughly every 28s (the probe's own runtime)
   # for as long as it sat there.
-  [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && [ "$hash" != "$prev" ] && work=yes
+  [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && [ "$draftsig" != "$prevdrafts" ] && work=yes
   # A stale queue is only work when Linear has something to rebuild it FROM.
   # Without this the loop wakes every 30 minutes on an empty ready column, to
   # rebuild an empty file into an identical empty file.
@@ -637,11 +656,13 @@ probe() {
     [ "$MODE" != once ] && return 1
     if [ "$hash" = "$prev" ]; then
       save_state "$hash"
+      save_drafts_state "$draftsig"
       return 1
     fi
   fi
 
   save_state "$hash"
+  save_drafts_state "$draftsig"
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots max=$max_agents$capnote"
