@@ -570,7 +570,16 @@ probe() {
   # Feedback needs no slot to act on: a reply, a re-draft and a follow-up ticket
   # are all free. Only the rework behind it needs an agent.
   [ "$n_feedback" -gt 0 ] && work=yes
-  [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && work=yes
+  # A draft already surfaced on a prior probe is not work again on its own — only
+  # a draft whose verdict actually changed since the state file was last saved.
+  # Without the hash check, a draft the model has already looked at and can do
+  # nothing more with (still `CONFLICTING` against a base that has not moved,
+  # blocked on another PR to merge first) reports "work=yes" on every probe
+  # forever: `--wait` never sleeps its `WAIT_INTERVAL`, and instead re-runs the
+  # full forge-reading probe back to back. Seen for real on HYR2-1339's stack:
+  # a held draft woke the waiter roughly every 28s (the probe's own runtime)
+  # for as long as it sat there.
+  [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && [ "$hash" != "$prev" ] && work=yes
   # A stale queue is only work when Linear has something to rebuild it FROM.
   # Without this the loop wakes every 30 minutes on an empty ready column, to
   # rebuild an empty file into an identical empty file.
