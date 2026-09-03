@@ -228,10 +228,25 @@ probe() {
   # OLDEST open PRs, and an invisible PR is absent from REGATE, DRAFTS and
   # RESTACK alike — which reads exactly like a clean board.
   PR_LIMIT="${LO_PR_LIMIT:-400}"
-  prs=$(gh pr list --repo "$slug" --state open --limit "$PR_LIMIT" \
-    --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>/dev/null)
+  # Keep stderr: a discarded one makes every GATE-ERROR undiagnosable, and this
+  # is the call that fails. It is ~5s of GraphQL over every open PR, and GitHub
+  # refuses it intermittently while the agents hammer the same API. `jq` decides
+  # whether the reply is a board, because `gh` exits 0 on some of these.
+  pr_try=$(gh pr list --repo "$slug" --state open --limit "$PR_LIMIT" \
+    --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>&1)
+  if ! printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    # One retry. It turns the common transient back into a normal probe instead
+    # of a wake that costs a tick, and two refusals in a row is a real outage.
+    sleep 5
+    pr_try=$(gh pr list --repo "$slug" --state open --limit "$PR_LIMIT" \
+      --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>&1)
+  fi
   # A broken gh is itself worth waking for — never wait quietly on it.
-  [ -z "$prs" ] && { echo "GATE-ERROR: gh pr list failed"; return 0; }
+  if ! printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "GATE-ERROR: gh pr list failed — $(printf '%s' "$pr_try" | tr '\n' ' ' | cut -c1-200)"
+    return 0
+  fi
+  prs="$pr_try"
 
   # And say so if it ever binds again, rather than truncating quietly.
   pr_count=$(printf '%s' "$prs" | jq 'length')
