@@ -61,6 +61,7 @@ SLOT_SCAN="${LO_SLOT_SCAN:-$(awk -v r="$(( $(sysctl -n hw.memsize) / 1073741824 
   -v a="${LO_RAM_PER_AGENT:-2.5}" 'BEGIN{m=int(r/a); print (m<8?8:m)}')}"
 WAIT_INTERVAL="${LO_WAIT_INTERVAL:-60}"   # --wait: seconds between probes
 WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re-arm
+GATE_ERR_WAKE="${LO_GATE_ERR_WAKE:-3}"    # --wait: consecutive forge errors before waking
 # Comments written before the loop started marking its own carry no marker, so
 # they would all read as human. This floor is the day marking began: nothing
 # before it is ever treated as feedback.
@@ -121,6 +122,10 @@ NOREASON=""
 # there is work; prints nothing and returns 1 when there is not, leaving the
 # reason in $NOREASON for the caller to print or swallow.
 probe() {
+  # Set when the forge could not be read at all. It is not work, and in --wait
+  # the caller decides whether an outage has lasted long enough to wake for.
+  GATE_ERR=""
+
   # --- hourly base-branch refresh (refuses, never forces) ---
   stamp=~/.claude/linear-orchestrator/last-fetch
   notes=""
@@ -244,9 +249,11 @@ probe() {
       --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>&1)
     printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1 && break
   done
-  # A broken gh is itself worth waking for — never wait quietly on it.
+  # A broken gh is worth waking for, but only once it is more than a blip — the
+  # wait loop counts them. A single probe still says so and exits.
   if ! printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    echo "GATE-ERROR: gh pr list failed — $(printf '%s' "$pr_try" | tr '\n' ' ' | cut -c1-200)"
+    GATE_ERR="gh pr list failed — $(printf '%s' "$pr_try" | tr '\n' ' ' | cut -c1-200)"
+    [ "$MODE" != "wait" ] && echo "GATE-ERROR: $GATE_ERR"
     return 0
   fi
   prs="$pr_try"
@@ -647,16 +654,33 @@ MODE=wait
 [ -n "$2" ] && WAIT_MAX="$2"
 started=$(date +%s)
 echo "waiting for work - probe every ${WAIT_INTERVAL}s, give up after $(dur $WAIT_MAX)"
-lastkey=""; lastprint=0
+lastkey=""; lastprint=0; gate_errs=0
 while :; do
   if probe; then
-    echo "--- woke after $(dur $(( $(date +%s) - started ))) ---"
-    exit 0
-  fi
-  key=$(printf '%s' "$NOREASON" | tr -d '0-9.')
-  if [ "$key" != "$lastkey" ] || [ $(( $(date +%s) - lastprint )) -ge 600 ]; then
-    echo "$(date -u +%H:%MZ) NO - $NOREASON"
-    lastkey="$key"; lastprint=$(date +%s)
+    if [ -z "$GATE_ERR" ]; then
+      echo "--- woke after $(dur $(( $(date +%s) - started ))) ---"
+      exit 0
+    fi
+    # A forge that cannot be read is not work. Waking on one costs a tick and
+    # hands the model nothing to act on: `probe` has already tried three times,
+    # and a hand-run `gh` a minute later succeeds every time. api.github.com
+    # resolves to a NAT64 address as well as an IPv4 one, and outages on that
+    # path outlast any retry window worth putting inside a probe. So count them
+    # instead: GATE_ERR_WAKE probes in a row is an outage a person should see.
+    gate_errs=$(( gate_errs + 1 ))
+    [ "$gate_errs" -eq 1 ] && echo "$(date -u +%H:%MZ) forge unreadable, still waiting - $GATE_ERR"
+    if [ "$gate_errs" -ge "$GATE_ERR_WAKE" ]; then
+      echo "GATE-ERROR: $GATE_ERR"
+      echo "--- woke after $(dur $(( $(date +%s) - started ))) ---"
+      exit 0
+    fi
+  else
+    gate_errs=0
+    key=$(printf '%s' "$NOREASON" | tr -d '0-9.')
+    if [ "$key" != "$lastkey" ] || [ $(( $(date +%s) - lastprint )) -ge 600 ]; then
+      echo "$(date -u +%H:%MZ) NO - $NOREASON"
+      lastkey="$key"; lastprint=$(date +%s)
+    fi
   fi
   now=$(date +%s)
   if [ $(( now - started )) -ge "$WAIT_MAX" ]; then
