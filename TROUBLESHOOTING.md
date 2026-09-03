@@ -113,3 +113,22 @@ to `SKILL.md`. The tick itself does not read this.
   clear another's. After a night's run:
   `osascript -e 'tell application "Google Chrome" to get URL of every tab of every window'`
 - **macOS only.** `cca` needs `open -a Terminal` and APFS `cp -Rc`.
+
+## The loop stalls with `load N over 10.0` and almost no agents running
+
+An agent left background processes behind. Seen twice, both times a load
+generator an agent started to reproduce a flaky test under CPU pressure: it
+spawned one busy loop per core and cleaned up with `jobs -p`, which returns
+nothing in a non-interactive shell. Ten shells then ran at 100% CPU under
+launchd until someone noticed, and the capacity gate refused every tick because
+the load it measures was real.
+
+**Find it:** `ps -Ao pid,pcpu,etime,command -r | head` — orphaned shells show a
+`PPID` of 1 and an elapsed time far longer than any live agent.
+
+**Fix it:** `pkill -f '<the exact command pattern>'`. Never kill by cpu alone;
+a build legitimately runs hot.
+
+**Prevent it:** the agent prompt now tells agents to keep pids explicitly and
+kill them in a `trap ... EXIT`. A dev server has the same shape — it survives the
+session and holds memory the gate never sees.
