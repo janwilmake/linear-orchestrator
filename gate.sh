@@ -232,15 +232,18 @@ probe() {
   # is the call that fails. It is ~5s of GraphQL over every open PR, and GitHub
   # refuses it intermittently while the agents hammer the same API. `jq` decides
   # whether the reply is a board, because `gh` exits 0 on some of these.
-  pr_try=$(gh pr list --repo "$slug" --state open --limit "$PR_LIMIT" \
-    --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>&1)
-  if ! printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1; then
-    # One retry. It turns the common transient back into a normal probe instead
-    # of a wake that costs a tick, and two refusals in a row is a real outage.
-    sleep 5
+  # Three attempts over ~25s, because the failure arrives in clusters rather
+  # than singly: api.github.com resolves to a NAT64 address as well as an IPv4
+  # one, and while that path is down every call inside the same few seconds
+  # times out together. One retry at 5s sat inside one cluster and woke the loop
+  # a minute after arming. A wake that costs a tick is worth more than 25s here.
+  pr_try=""
+  for pr_delay in 0 5 20; do
+    [ "$pr_delay" -gt 0 ] && sleep "$pr_delay"
     pr_try=$(gh pr list --repo "$slug" --state open --limit "$PR_LIMIT" \
       --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>&1)
-  fi
+    printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1 && break
+  done
   # A broken gh is itself worth waking for — never wait quietly on it.
   if ! printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1; then
     echo "GATE-ERROR: gh pr list failed — $(printf '%s' "$pr_try" | tr '\n' ' ' | cut -c1-200)"
