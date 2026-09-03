@@ -466,6 +466,13 @@ it already has overrides what it correctly knew.
 > image.
 >
 > Do not run `npm install` — `node_modules` is a symlink to the real checkout.
+>
+> **Never leave a background process behind.** A load generator, a watcher or a
+> dev server you start must die before you stop. `jobs -p` is empty in a
+> non-interactive shell, so a cleanup built on it kills nothing: keep each pid as
+> you start it (`(while :; do :; done) & pids="$pids $!"`) and `kill $pids` in a
+> `trap ... EXIT`. Two runs have leaked ten busy loops each at 100% CPU, which
+> starves every other agent and stalls the loop for an hour.
 > Other agents are running dev servers, so take a free port in 5200–5299 and
 > point `VITE_BASE_URL` at it.
 >
