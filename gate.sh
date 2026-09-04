@@ -112,6 +112,12 @@ STATE=~/.claude/linear-orchestrator/gate-state
 # every open draft look new again. A draft is only work when something about
 # THAT draft moved.
 DSTATE=~/.claude/linear-orchestrator/gate-drafts-state
+# Same reasoning for the de-gate list. REGATE normally clears itself: the model
+# acts, the PR goes back to draft, and it drops off. It only persists when the
+# model looks and deliberately declines — a conflict GitHub reports that does not
+# exist, a layer whose base is mid-repair — and nothing in the gate records that
+# decision, so an unconditional work=yes re-wakes on the entry forever.
+RSTATE=~/.claude/linear-orchestrator/gate-regate-state
 QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
@@ -125,6 +131,7 @@ save_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$STATE"; }
 # Written from the same places as save_state, so the two never drift: a probe
 # the model did not see must move neither of them.
 save_drafts_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$DSTATE"; }
+save_regate_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$RSTATE"; }
 NOREASON=""
 
 # probe: measure the world once. Prints the context block and returns 0 when
@@ -582,9 +589,19 @@ probe() {
       2>/dev/null | shasum | cut -c1-16)
   prevdrafts=$(cat "$DSTATE" 2>/dev/null)
 
+  # The same fingerprint for the de-gate list, over the fields a REGATE entry is
+  # judged on. A PR that goes red or starts conflicting still wakes the model at
+  # once, because its verdict changed; only an entry already seen and unchanged
+  # stops re-waking.
+  regatesig=$(printf '%s' "$regate" | jq -Sc '[ .[] | {pr,draft,merge,ci,invalid} ]' \
+      2>/dev/null | shasum | cut -c1-16)
+  prevregate=$(cat "$RSTATE" 2>/dev/null)
+
   # --- decide ---
   work=no
-  [ "$n_regate"  -gt 0 ] && work=yes            # acted on even at slots 0
+  # Still acted on at slots 0 — a de-gate needs no agent — but only once per
+  # change. See RSTATE above for why the unconditional form spun.
+  [ "$n_regate"  -gt 0 ] && [ "$regatesig" != "$prevregate" ] && work=yes
   [ "$n_invalid" -gt 0 ] && work=yes
   # Feedback needs no slot to act on: a reply, a re-draft and a follow-up ticket
   # are all free. Only the rework behind it needs an agent.
@@ -657,12 +674,14 @@ probe() {
     if [ "$hash" = "$prev" ]; then
       save_state "$hash"
       save_drafts_state "$draftsig"
+      save_regate_state "$regatesig"
       return 1
     fi
   fi
 
   save_state "$hash"
   save_drafts_state "$draftsig"
+  save_regate_state "$regatesig"
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots max=$max_agents$capnote"
