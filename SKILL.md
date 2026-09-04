@@ -438,11 +438,21 @@ it already has overrides what it correctly knew.
 >
 > Never use a file or line count as a risk proxy.
 >
-> **It stays a draft** (`gh pr create --draft`) and you never take it out. Start
-> the body with:
+> **It stays a draft** (`gh pr create --draft`) and you never take it out.
+>
+> **The marker goes on the second line of the body, under the ticket link:**
 > `🌙 lo:<OWNER> opened by the nightly orchestrator. Not seen by a human. Read the Decisions section before merging.`
-> (drop ` lo:<OWNER>` when it is empty). A PR without the tag is invisible to its
-> own loop; one with the wrong tag gets reviewed by the wrong machine.
+> Both want the first line and the ticket link wins, because the ticket is what a
+> reviewer judges the scope against. **`<OWNER>` is the literal value of
+> `LO_OWNER`** — the dispatching tick substitutes it and passes the finished
+> string, because an agent cannot read that config and a placeholder left
+> unresolved is the same as no tag. Drop ` lo:<OWNER>` only when `LO_OWNER` is
+> genuinely empty.
+>
+> A PR without the tag is invisible to its own loop — not in its drafts, and not
+> in its feedback scan, so a reviewer's blocker goes unanswered. One with the
+> wrong tag gets reviewed by the wrong machine. The gate cannot tell a malformed
+> marker from another team's PR, so this failure is silent.
 >
 > **The body ends with the loop's own footer, not the harness's.** Replace the
 > `🤖 Generated with [Claude Code](…)` line the harness asks for with:
