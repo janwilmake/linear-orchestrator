@@ -151,10 +151,42 @@ ticket, a visible `🌙` instead — Linear renders HTML comments as literal tex
 exception: reviews, fix-pass replies, promotion comments, de-gate notices, acks.
 An unmarked comment on a loop PR is a person talking to it.
 
-**The loop's comments are collapsed; a person's are not.** Each goes in a
-`<details>` whose summary names the contents, with a blank line under the
-`<summary>` line. Four things never collapse: a `## Blocked on` notice, the
-human-action line of a promotion comment, an ack, and anything a person wrote.
+**Every comment carries two sections, and both collapse.** **Human Input** first
+— the human turns since your own last comment on that thread, oldest first,
+quoted verbatim — then **AI written**, the answer. A reader cannot weigh an
+answer without the question. Three things never collapse: a `## Blocked on`
+notice, the human-action line of a promotion comment, and an ack.
+
+Nobody asked is a value, not a gap: `Human Input (none — dispatched by the
+nightly orchestrator)`. Where the dispatch quoted a person, that text is the
+Human Input — the ticket description for a fresh ticket, the reviewer comment
+for a rework. Collapsing the section is what makes quoting every turn
+affordable, so quote them all rather than picking one. A name that belongs to a
+candidate or a customer is replaced by the role (`[a candidate]`) and the rest
+stays verbatim.
+
+**The markup differs per medium**, measured rather than assumed. On GitHub each
+section is a `<details>` whose `<summary>` names it, with a blank line under the
+`<summary>` line. On a tracker that renders no raw HTML — Linear does not, and
+turns its own `>>>` into a plain blockquote — they are bold labels instead:
+
+```markdown
+<details>
+
+<summary><b>Human Input</b></summary>
+
+> pls review
+
+</details>
+
+<details>
+
+<summary><b>AI written</b></summary>
+
+Six findings, two blockers.
+
+</details>
+```
 
 **Every comment gets an ack**, including ones that need no work. The reply starts
 with `<!-- 🌙 ack:<id> -->`, which is how the gate knows it is answered.
@@ -462,7 +494,8 @@ it already has overrides what it correctly knew.
 > `Claude-Session:` git trailer as it is.
 >
 > **Start every PR comment with the marker line, and every Linear comment with a
-> visible `🌙`** — the orchestrator answers unmarked comments as if a person
+> visible `🌙`**, and **give every comment its Human Input and AI written
+> sections** — the orchestrator answers unmarked comments as if a person
 > wrote them.
 >
 > **Every section of the body is collapsed**, `## Decisions` included: a
@@ -515,9 +548,10 @@ Shorter: no branching, no Decisions, no claim. Each starts with
 `gh pr checkout <PR#>` and each ends with **leave it a draft** — only the
 orchestrator promotes.
 
-All of them **start every comment with `<!-- 🌙 -->`**, **collapse what they
-write** in a `<details>` naming the contents (`🌙 Review — 6 findings, 2
-blockers`), and **end with the same teardown as the agent prompt** — window,
+All of them **start every comment with `<!-- 🌙 -->`**, **write both
+sections** — a collapsed **Human Input** carrying what the dispatch quoted, then
+a collapsed **AI written** naming the contents (`🌙 AI written — 6 findings,
+2 blockers`) — and **end with the same teardown as the agent prompt** — window,
 tabs, bounds, dev server. The dev server is a detached `npm exec` child that
 survives the session and holds 150–200 MB the capacity gate never sees.
 
