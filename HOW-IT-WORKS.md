@@ -44,8 +44,9 @@ machine. So the loop marks its own instead:
   can lose. Nothing is answered twice, and nothing is answered never.
 - Every comment gets an answer, including the ones that need no work. Silence is
   the one wrong reply.
-- The loop's own comments are collapsed into `<details>`. A person's are not, and
-  neither is anything a person must act on.
+- Every comment the loop writes carries two collapsed sections: **Human Input**,
+  the words that led to it, and **AI written**, the answer. A reader cannot weigh
+  an answer without the question. Anything a person must act on stays open.
 
 Set `LO_FEEDBACK_SINCE` to the day you install this. Comments older than it were
 written before marking began, so they carry no marker and would all read as
