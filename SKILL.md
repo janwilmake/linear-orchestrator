@@ -334,9 +334,20 @@ Then drop every ticket that:
   ticket stays in Todo and is read again on the next rebuild.
 
 **A ticket blocked by an open PR is a stack layer.** Cut it from that PR's head
-branch instead of `BASE_BRANCH`, open the PR with `--base` set to that branch,
-and tell the agent both in its prompt — the checkout line and a line on merge
-order. Layers of one parent can sit in Todo together and start one after the
+branch instead of `BASE_BRANCH`, and tell the agent both in its prompt — the
+checkout line and a line on merge order.
+
+**Every layered PR is a GitHub stack, never a bare PR against another branch.**
+The agent opens its draft against the lower layer's branch, then links the whole
+chain with `gh stack link --remote origin --base <BASE_BRANCH> <bottom PR> …
+<its own PR>` (the repo's `gh-stack` skill has the non-interactive commands).
+**`--base <BASE_BRANCH>` is not optional:** without it `gh stack` roots the stack
+on the repository's default branch and retargets the bottom PR to it — `main` on
+a repo whose trunk is `dev` — and a PR inside a stack cannot be retargeted. The
+only repair is `gh stack unstack <stack number>`, then `gh pr edit <bottom> --base
+<BASE_BRANCH>`, then the link again with `--base`. After linking, confirm with
+`gh pr view <bottom PR> --json baseRefName` that the bottom still targets
+`BASE_BRANCH`. Layers of one parent can sit in Todo together and start one after the
 other, each as soon as the layer below has its PR. When the lower layer's review
 later adds fix commits, the layer above merges its base in again — a stack layer
 behind its base is `RESTACK` / needs-mergeable work like any other.
@@ -578,8 +589,10 @@ the seam. This agent does not review it; it re-cuts it.
 * **Find the seams from the dependency order**, not the file tree — schema and
   migration at the bottom, then pure modules, then routes, then UI. A layer that
   cannot build and pass its own tests alone is in the wrong place.
-* Use the repo's stacking tool (`gh-stack` here). **Each layer targets the layer
-  below**, except the bottom one.
+* Use the repo's stacking tool (`gh-stack` here), so the layers form a GitHub
+  stack. **Each layer targets the layer below**, except the bottom one, which
+  targets `BASE_BRANCH` — pass `--base <BASE_BRANCH>` to every `gh stack init`,
+  `link` and `submit`, or the bottom lands on the default branch (see 2d).
 * Every layer is a draft, carries the marker, links the ticket.
 * **Close the original PR last**, after the stack is up and verified, with a
   comment linking every layer.
