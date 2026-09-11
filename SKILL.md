@@ -324,7 +324,22 @@ Then drop every ticket that:
   (`gh pr list --state open --base <BASE_BRANCH> --json headRefName,title`);
 - is only a write to a `PROD_SURFACE`;
 - needs an artifact no agent has — a design file, a customer decision, a
-  credential, an unconnected account.
+  credential, an unconnected account;
+- is **blocked by** a ticket whose first PR does not exist yet. `list_issues`
+  returns no relations, so read each survivor with
+  `get_issue(<id>, includeRelations: true)`. A blocker counts as cleared when it
+  is Done or Canceled, or as soon as its PR is open and its author agent has
+  finished — the PR exists and no live agent slot holds its branch. **A draft is
+  enough: do not wait for its review, its promotion or its merge.** A dropped
+  ticket stays in Todo and is read again on the next rebuild.
+
+**A ticket blocked by an open PR is a stack layer.** Cut it from that PR's head
+branch instead of `BASE_BRANCH`, open the PR with `--base` set to that branch,
+and tell the agent both in its prompt — the checkout line and a line on merge
+order. Layers of one parent can sit in Todo together and start one after the
+other, each as soon as the layer below has its PR. When the lower layer's review
+later adds fix commits, the layer above merges its base in again — a stack layer
+behind its base is `RESTACK` / needs-mergeable work like any other.
 
 A vague description is **fine to take**; deciding what it meant is the agent's
 job. **A research ticket is work, not a skip** — the answer is the PR body, the
