@@ -292,8 +292,13 @@ Only when 2a, 2b and 2c are empty. `QUEUE_CACHE`:
 
 ```json
 { "builtAt": "2026-08-13T02:14:07Z",
-  "tickets": [ { "id": "XXX-431", "branch": "feature/xxx-431-fix-something" } ] }
+  "tickets": [ { "id": "XXX-431", "branch": "feature/xxx-431-fix-something" } ],
+  "skipped": [ { "id": "XXX-432", "reason": "blocked by XXX-430, no PR yet" } ] }
 ```
+
+`skipped` holds every ticket the rebuild dropped, under exactly that key. `gate.sh`
+subtracts those ids from `TODO-CANDIDATES`. Under any other key, the waiter wakes
+on every PR change around a ticket the loop will not take.
 
 `Read` it and rebuild only when it is missing or `builtAt` is over 30 minutes
 old. Otherwise take the first `slots` entries and read nothing from the tracker.
