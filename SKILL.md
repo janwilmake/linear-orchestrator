@@ -146,8 +146,7 @@ above is empty.
 #### 2a — Act on what a person said
 
 **Every comment the loop or its agents write on GitHub starts with
-`<!-- 🌙 lo:<OWNER> -->`** (`<!-- 🌙 -->` when `LO_OWNER` is empty). On a Linear
-ticket, a visible `🌙` instead — Linear renders HTML comments as literal text. No
+`<!-- 🌙 lo:<OWNER> -->`** (`<!-- 🌙 -->` when `LO_OWNER` is empty). No
 exception: reviews, fix-pass replies, promotion comments, de-gate notices, acks.
 An unmarked comment on a loop PR is a person talking to it.
 
@@ -371,7 +370,12 @@ Per ticket, before any spawning:
    within the tiers. If it moved, drop it and take the next entry.
 2. Move it to `CLAIMED_STATUS` **and assign it to `ASSIGNEE_TIER_1`** in one
    `save_issue`, whichever tier it came from.
-3. Comment on the ticket: picked up by the nightly orchestrator, at what time.
+
+**Never comment on a Linear ticket.** The status move is the pickup record, and
+Linear's GitHub integration links the PR to the ticket through the branch name
+(the PR body's ticket link covers a workspace without it). A decision, finding or
+scope change belongs in the ticket description, because the agent that picks the
+ticket up reads the description and not its comments.
 
 If the tracker write fails, do not spawn. If the `cca` call fails after the
 status moved, put the ticket back to `READY_STATUS`.
@@ -519,10 +523,9 @@ it already has overrides what it correctly knew.
 > hands your session; when it gave you none, drop the second half. Keep the
 > `Claude-Session:` git trailer as it is.
 >
-> **Start every PR comment with the marker line, and every Linear comment with a
-> visible `🌙`**, and **give every comment its Human Input and AI written
-> sections** — the orchestrator answers unmarked comments as if a person
-> wrote them.
+> **Start every PR comment with the marker line**, and **give every comment its
+> Human Input and AI written sections** — the orchestrator answers unmarked
+> comments as if a person wrote them.
 >
 > **Every section of the body is collapsed**, `## Decisions` included: a
 > `<details>` whose `<summary>` is the section name, with a blank line under it or
@@ -560,7 +563,9 @@ it already has overrides what it correctly knew.
 > draft PR is open and your commits are pushed. Do not run `/review`, and do not
 > pre-empt it by re-reading your own diff for faults.
 >
-> Comment the PR link on the ticket, leave it In Progress, and stop.
+> Leave the ticket In Progress and stop. **Never comment on the Linear ticket**:
+> Linear links your PR through the branch name, and anything the ticket got wrong
+> goes in the PR body's Decisions or Out of scope section.
 >
 > **Then clean up, as the last thing you do:** close the window you opened
 > (`close window id <id>`), close every tab you opened outside it with
