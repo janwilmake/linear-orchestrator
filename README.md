@@ -56,8 +56,8 @@ feature.
    and stops.
 3. **A second agent reviews that PR in a fresh context** — it has the diff, the
    ticket and your repo's agent guide, and none of the reasoning the author talked
-   itself into. It posts the review as one comment, makes exactly one fix pass over
-   what it found, and corrects the PR body where the diff moved past it.
+   itself into. It logs the review as one entry in the PR's single log comment, makes exactly
+   one fix pass over what it found, and corrects the PR body where the diff moved past it.
 4. **The PR leaves draft on the five gates**, or stays a draft.
 5. **Your comment re-opens any of it.** An unanswered comment on one of its PRs
    outranks every other kind of work on the next tick.

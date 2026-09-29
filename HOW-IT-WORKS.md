@@ -37,16 +37,18 @@ Every agent posts through your own `gh`, so every comment on every PR carries
 **your** GitHub login. The author field can never separate a person from a
 machine. So the loop marks its own instead:
 
-- Every comment the loop or one of its agents writes starts with `<!-- 🌙 -->`.
+- The loop writes **one comment per PR, its log**, marked `<!-- 🌙 log -->`.
+  Every action — a review, a fix pass, a merge of the base, an answer to you — is
+  one collapsed entry with a one-line summary, oldest at the top and newest at
+  the bottom. `lo-log.sh` is its only writer. Promoting and re-drafting write
+  nothing: the draft state is the record.
 - An unmarked comment on a PR the loop opened is a person talking to it.
-- Its reply names the comment it answers — `<!-- 🌙 ack:<comment-id> -->` — so
-  "already handled" is a fact recorded on GitHub, not in a cache that a `/clear`
-  can lose. Nothing is answered twice, and nothing is answered never.
+- Its answer is one `human` entry in the log that quotes your comment and names
+  its id — `ack:<comment-id>` in the entry's hidden marker — so "already handled"
+  is a fact recorded on GitHub, not in a cache that a `/clear` can lose. Nothing
+  is answered twice, and nothing is answered never.
 - Every comment gets an answer, including the ones that need no work. Silence is
   the one wrong reply.
-- Every comment the loop writes carries two collapsed sections: **Human Input**,
-  the words that led to it, and **AI written**, the answer. A reader cannot weigh
-  an answer without the question. Anything a person must act on stays open.
 
 Set `LO_FEEDBACK_SINCE` to the day you install this. Comments older than it were
 written before marking began, so they carry no marker and would all read as

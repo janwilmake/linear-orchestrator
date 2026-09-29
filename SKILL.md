@@ -129,7 +129,7 @@ history rewrite on a branch with an open PR", and its edges are narrow — layer
 of one stack the loop opened, rebased only onto each other, when every layer is
 promoted. Restack when the stack is otherwise finished, not after each fix pass.
 
-`FEEDBACK` and `REGATE` are work at any slot count — an ack, a re-draft and a
+`FEEDBACK` and `REGATE` are work at any slot count — a `human` entry, a re-draft and a
 follow-up ticket need no agent.
 
 ### Step 2 — pick the next `slots` pieces of work
@@ -147,69 +147,62 @@ above is empty.
 
 #### 2a — Act on what a person said
 
-**Every comment the loop or its agents write on GitHub starts with
-`<!-- 🌙 lo:<OWNER> -->`** (`<!-- 🌙 -->` when `LO_OWNER` is empty). No
-exception: reviews, fix-pass replies, promotion comments, de-gate notices, acks.
-An unmarked comment on a loop PR is a person talking to it.
+**The loop writes one comment per PR: its log.** Every action the loop or its
+agents take on a PR becomes one entry in that comment, never a comment of its
+own. The comment starts with `<!-- 🌙 lo:<OWNER> log -->`; each entry is one
+collapsed `<details>` whose summary is a date, a time and one line
+(`2026-09-29 17:25 · Review: 0 blockers, 3 follow-ups`), oldest at the top and
+newest at the bottom, like GitHub's own comment order. A person reads the
+summary lines and opens only what they need.
 
-**Every comment carries two sections, and both collapse.** **Human Input** first
-— the human turns since your own last comment on that thread, oldest first,
-quoted verbatim — then **AI written**, the answer. A reader cannot weigh an
-answer without the question. Three things never collapse: a `## Blocked on`
-notice, the human-action line of a promotion comment, and an ack.
+**`lo-log.sh` beside this skill is the only writer**:
 
-Nobody asked is a value, not a gap: `Human Input (none — dispatched by the
-nightly orchestrator)`. Where the dispatch quoted a person, that text is the
-Human Input — the ticket description for a fresh ticket, the reviewer comment
-for a rework. Collapsing the section is what makes quoting every turn
-affordable, so quote them all rather than picking one. A name that belongs to a
-candidate or a customer is replaced by the role (`[a candidate]`) and the rest
-stays verbatim.
-
-**The markup differs per medium**, measured rather than assumed. On GitHub each
-section is a `<details>` whose `<summary>` names it, with a blank line under the
-`<summary>` line. On a tracker that renders no raw HTML — Linear does not, and
-turns its own `>>>` into a plain blockquote — they are bold labels instead:
-
-```markdown
-<details>
-
-<summary><b>Human Input</b></summary>
-
-> pls review
-
-</details>
-
-<details>
-
-<summary><b>AI written</b></summary>
-
-Six findings, two blockers.
-
-</details>
+```bash
+~/.claude/skills/linear-orchestrator/lo-log.sh <PR#> <kind> "<one-line summary>" <detail-file|-> [--ack <comment-id>]
 ```
 
-**Every comment gets an ack**, including ones that need no work. The reply starts
-with `<!-- 🌙 ack:<id> -->`, which is how the gate knows it is answered.
+It creates the comment on first use, appends the entry, writes a hidden
+`<!-- 🌙 lo:<OWNER> entry kind=… at=… sha=… -->` marker above it, and trims the
+oldest entries to their summary line when GitHub's size limit comes near. Kinds:
+`review`, `fix`, `merge`, `ci`, `rework`, `human`, `adopt-review`, `split`,
+`restack`, `note`.
+
+* **Promoting and re-drafting get no entry.** The draft state is the record.
+  What a person must still do before the merge lives in the body's **Needs human
+  verification** title, not in a comment.
+* **An entry the loop writes on its own has no Human Input section.** Nobody
+  asked, so there is nothing to quote.
+* **A human comment gets exactly one entry**, kind `human`, with `--ack <its id>`.
+  Its summary names the request in a few words; its detail quotes the comment
+  verbatim, then says what the loop did about it. The `ack:<id>` in the marker is
+  how the gate knows the comment is answered. A name that belongs to a candidate
+  or a customer is replaced by the role (`[a candidate]`).
+* **A `## Blocked on` notice lives in the PR body**, never in the log.
+* An unmarked comment on a loop PR is a person talking to it. Old PRs keep the
+  separate comments they already have; new actions go to the log.
+
+Linear renders no raw HTML, so a Linear ticket description keeps its own `+++`
+sections; this log is GitHub only.
 
 Take entries oldest first. Read the body with
 `gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body`, or
 `…/pulls/<pr>/reviews/<id> --jq .body` for an entry with `kind: "review"`, then
 route on the PR state:
 
-1. **`OPEN`** — re-draft (`gh pr ready --undo <PR#>`), ack with what you
-   understood, and dispatch the rework with the comment quoted verbatim.
+1. **`OPEN`** — re-draft (`gh pr ready --undo <PR#>`), write the `human` entry
+   with what you understood, and dispatch the rework with the comment quoted
+   verbatim. The rework agent adds its own `rework` entry when it is done.
 2. **`MERGED` / `CLOSED`** — create a ticket in `READY_STATUS` with the comment
-   quoted and the PR linked; ack with the ticket id.
-3. **Neither** — ack with the answer and invent no work.
+   quoted and the PR linked; the `human` entry names the ticket id.
+3. **Neither** — the `human` entry holds the answer; invent no work.
 
-"Stop", "leave it", "this is fine" — ack and do nothing. Never argue with a
+"Stop", "leave it", "this is fine" — a `human` entry that says so, and nothing else. Never argue with a
 person on a PR.
 
 **A comment naming numbers is a ticket order.** The numbers are the PR body's
 `## Out of scope & Suggestions` items, or a research PR's numbered options. Read
 the named items out of the body, create one ticket each in `READY_STATUS` with
-the item **quoted verbatim** and the PR linked, and ack with the ids. Never
+the item **quoted verbatim** and the PR linked, and name the ids in the `human` entry. Never
 renumber the section; when a PR carries both lists, say which you read.
 
 **Before creating any ticket, check it does not exist.** Other loops write to
@@ -219,8 +212,8 @@ search anyway:
 `list_issues(team: TRACKER_TEAM, query: "<subject>", includeArchived: false)`.
 
 **The `invalid` label**, per PR it names — find the ticket (branch name and body
-carry the id), move it back to `READY_STATUS`, `gh pr ready --undo`, comment that
-it was picked up, and **remove the label only once the rework is actually
+carry the id), move it back to `READY_STATUS`, `gh pr ready --undo`, log a `note`
+entry that it was picked up, and **remove the label only once the rework is actually
 spawned** (`gh pr edit <PR#> --remove-label`). The label is the durable record
 that a reclaim is owed, so a PR that got no slot keeps it. Spawn the rework on
 this tick ahead of any draft, claiming the ticket as in step 3 first, ordered by
@@ -234,9 +227,9 @@ For each PR on the `REGATE` line:
 1. **Skip it if a live agent holds its branch** — `~/.claude/agents/agent-N.lock`
    plus `git -C ~/.claude/agents/agent-N branch --show-current`.
 2. `gh pr ready --undo <PR#>`.
-3. Comment why in one sentence: conflicts with `BASE_BRANCH`, or CI red.
-4. Record it in `WORK_CACHE` as `needs-mergeable`.
-5. **With a slot, dispatch the fix now.** Steps 1–4 need none.
+3. Record it in `WORK_CACHE` as `needs-mergeable`.
+4. **With a slot, dispatch the fix now.** Steps 1–3 need none. The agent logs a
+   `merge` or `ci` entry when it is done.
 
 Only ever touch PRs carrying the `🌙` marker. **Keep fixing, however many times
 it takes.** If the same paths keep colliding, have the agent stop and name the
@@ -244,15 +237,16 @@ file and whose work it fights.
 
 #### 2c — Finish the drafts
 
-A draft becomes ready on five gates: a review posted on it; a fix pass over that
-review with a reply comment; a screenshot if a user can see the change;
+A draft becomes ready on five gates: a `review` entry in its log; a `fix` entry
+after it; a screenshot if a user can see the change;
 `mergeable` that is not `CONFLICTING`; and CI green on the head commit (every
 non-skipped check `SUCCESS`, with a `Test (shard …)` check present to prove the
 workflow ran).
 
 **Those five are the only reasons to keep a draft.** A PR that passes them but
 still needs a person — a manual test, a credential, an unconnected account — gets
-**promoted**, with that item as the opening line of the promotion comment.
+**promoted**. That item is already in the body's **Needs human verification**
+title, so the promotion writes nothing.
 
 `WORK_CACHE` holds what each draft is missing, rebuilt on the same 30-minute
 staleness rule as `QUEUE_CACHE`:
@@ -267,15 +261,15 @@ Classify each draft. **Check `## Blocked on` first** and promote on the spot:
 - **blocked** — the body carries `## Blocked on` as a heading on its own line
   (`grep -E '^## Blocked on'`, never as a substring — a PR writing *about* the
   convention would otherwise be promoted unreviewed). `gh pr ready <PR#>` now,
-  whatever state the code is in, and comment with the blocker as the opening
-  line. A research PR lands here by design. Record it and take no further action.
+  whatever state the code is in; the body's `## Blocked on` notice says why. A research PR lands here by design. Record it and take no further action.
 - **needs-mergeable** — `mergeable` is `CONFLICTING`, or CI on the head commit is
   failing. `UNKNOWN` is not this state; it means ask again next tick.
 - **needs-split** — a reviewer read it and said it cannot be reviewed in one
   sitting, naming the seam. Nothing else puts a PR here — not a file or line count.
-- **needs-review** — no review-shaped loop comment **dated after the head
-  commit**. Compare `.comments[].createdAt` against `.commits[-1].committedDate`.
-- **needs-fix** — a review exists, but no commit after it and no reply comment.
+- **needs-review** — the log has no `kind=review` entry. Read the markers:
+  `grep -o 'entry kind=[a-z-]* at=[^ ]*'` on the log comment's body. A PR from
+  before the log existed counts a review-shaped `🌙` comment instead.
+- **needs-fix** — a `review` entry exists, but no `fix` entry after it.
 - **needs-screenshot** — it touches a route, a component or a non-`.server` UI
   file, and the body carries no screenshot. A screenshot is a raster image on
   GitHub's attachment host: a URL containing `user-attachments`, not ending in
@@ -303,11 +297,11 @@ An adopted PR is a person's PR, not the loop's:
 
 * **Never** promote it, re-draft it, merge it, close it, or edit its title or
   body. The author owns them.
-* The loop's review comment starts with `<!-- 🌙 lo:<OWNER> adopt-review -->`.
-  That marker is how the gate knows the review happened, so it runs once only.
-  Other comments start with `<!-- 🌙 lo:<OWNER> -->`, as everywhere else.
-* The review pass is the same as **needs-review** in 2c: one review comment,
-  then one fix pass over its blockers, one commit, one reply.
+* The loop's review is a log entry of kind `adopt-review`. Its marker carries
+  `🌙 lo:<OWNER> adopt-review`, which is how the gate knows the review happened,
+  so it runs once only.
+* The review pass is the same as **needs-review** in 2c: one `adopt-review`
+  entry, then one fix pass over its blockers, one commit, one `fix` entry.
 * The merge and the CI fix are the same as **needs-mergeable**: merge the base,
   never rebase, never force-push.
 
@@ -553,9 +547,11 @@ it already has overrides what it correctly knew.
 > hands your session; when it gave you none, drop the second half. Keep the
 > `Claude-Session:` git trailer as it is.
 >
-> **Start every PR comment with the marker line**, and **give every comment its
-> Human Input and AI written sections** — the orchestrator answers unmarked
-> comments as if a person wrote them.
+>
+> **Never post a PR comment of your own.** Anything you have to say on the PR
+> is one entry in the loop's log comment, written with
+> `~/.claude/skills/linear-orchestrator/lo-log.sh <PR#> note "<one line>" <file>`.
+> The orchestrator answers an unmarked comment as if a person wrote it.
 >
 > **Every section of the body is collapsed**, `## Decisions` included: a
 > `<details>` whose `<summary>` is the section name, with a blank line under it or
@@ -609,10 +605,10 @@ Shorter: no branching, no Decisions, no claim. Each starts with
 `gh pr checkout <PR#>` and each ends with **leave it a draft** — only the
 orchestrator promotes.
 
-All of them **start every comment with `<!-- 🌙 -->`**, **write both
-sections** — a collapsed **Human Input** carrying what the dispatch quoted, then
-a collapsed **AI written** naming the contents (`🌙 AI written — 6 findings,
-2 blockers`) — and **end with the same teardown as the agent prompt** — window,
+All of them **write to the PR only through `lo-log.sh`** — one entry per
+action, its summary one line with the counts (`Review: 2 blockers, 4
+follow-ups`), no Human Input section unless a person's words are the reason for
+the work — and **end with the same teardown as the agent prompt** — window,
 tabs, bounds, dev server. The dev server is a detached `npm exec` child that
 survives the session and holds 150–200 MB the capacity gate never sees.
 
@@ -630,7 +626,7 @@ the seam. This agent does not review it; it re-cuts it.
   `link` and `submit`, or the bottom lands on the default branch (see 2d).
 * Every layer is a draft, carries the marker, links the ticket.
 * **Close the original PR last**, after the stack is up and verified, with a
-  comment linking every layer.
+  `split` entry linking every layer.
 * **"This is one indivisible change" is a legitimate answer** — say so with the
   reason and leave it. Do not manufacture layers.
 
@@ -651,27 +647,28 @@ else: no features, no bug fixes.
 * Run the `AGENT_GUIDE` checks on the conflicted branch **and every branch above it**.
 * It must not merge, touch the trunk, edit a PR body, or change any commit
   beyond what the conflict required.
-* It reports on the top layer's PR: what it rebased, every conflict, the numbers.
+* It writes a `restack` entry on the top layer's PR: what it rebased, every conflict, the numbers.
 
 **needs-review** — the main one.
 
 * Say the PR was opened by another agent and has never been reviewed.
 * **You may stop and call it unreviewable.** Read the whole diff first; if you
-  cannot hold it in one sitting, post one comment naming *why* and *where the
-  seam is*, and stop. That comment is what puts the PR into needs-split. Size
+  cannot hold it in one sitting, write one `split` entry naming *why* and *where
+  the seam is*, and stop. That entry is what puts the PR into needs-split. Size
   alone does not decide it — four thousand lines of generated code is one
   decision, three hundred lines spanning auth, tenancy and a migration may not
   be. **You are the judge because you read it; the gate only counts.**
-* Run `REVIEW_COMMAND`. **The review lands as one ordinary PR comment**
-  (`gh pr comment`), not a GitHub review with line notes. Run it in the
-  foreground and poll any background subagent — idling ends the session and kills
-  the pending review. Confirm with `gh pr view <PR#> --json comments` before you
-  fix anything, and write the comment yourself if it is not there.
+* Run `REVIEW_COMMAND`, but **do not let it post**: write the review to a file
+  and log it as a `review` entry, not a GitHub review with line notes and not a
+  comment of its own. Run it in the foreground and poll any background subagent —
+  idling ends the session and kills the pending review. Confirm the entry is in
+  the log before you fix anything.
 * Then **one** fix pass: every blocker, plus mechanical nits inside files the PR
   already changed. Leave the rest, do not widen the diff, do not review twice.
   Re-run the `AGENT_GUIDE` checks, re-test in the browser any blocker whose proof
-  was a runtime one, push one commit, and reply: what was fixed, in which commit,
-  what was left and why.
+  was a runtime one, push one commit, and write a `fix` entry: what was fixed, in which
+  commit, what was left and why. Its summary reads `Review fix: N fixed,
+  verified; M left`.
 * **Fix the PR body where the diff has moved past it.** Keep the marker and
   `## Decisions`, but **delete Decisions entries that record no choice**. Fix the
   shape too: every section collapsed, blank line under each `<summary>`,
@@ -686,10 +683,10 @@ else: no features, no bug fixes.
   — so replace a bare `Generated with Claude Code` line with it, keeping the
   author's session link.
 
-**needs-fix** — a review is already there. Say where to read it
-(`gh pr view <PR#> --json comments`, or
+**needs-fix** — a review is already there. Say where to read it (the `review`
+entry in the log, or an older 🌙 review comment, or
 `gh api repos/<owner>/<repo>/pulls/<PR#>/comments` for older inline reviews) and
-say **do not run the review again**. One fix pass, one commit, one reply.
+say **do not run the review again**. One fix pass, one commit, one `fix` entry.
 
 **needs-mergeable** — the branch cannot merge, or CI is red. Say which, and that
 it is the only thing to fix.
@@ -697,11 +694,11 @@ it is the only thing to fix.
 * **Merge `BASE_BRANCH` in, do not rebase** — a force-push here would throw away
   the review comments' line anchors.
 * Resolve each conflict keeping **both** intents. If the two cannot both hold,
-  that is a Decision to write in a PR comment, not a coin toss.
+  that is a Decision to write in the `merge` entry, not a coin toss.
 * **Change nothing else.** The diff grows only by the resolution and by what CI
   named.
-* Re-run the `AGENT_GUIDE` checks, push, then comment: what conflicted, how it
-  was resolved, what CI said.
+* Re-run the `AGENT_GUIDE` checks, push, then write a `merge` (or `ci`) entry:
+  what conflicted, how it was resolved, what CI said.
 
 A conflicted PR shows **no CI at all** rather than red CI — fix the conflict
 first and let CI run afterwards.
@@ -711,25 +708,27 @@ first and let CI run afterwards.
 * Start with `gh pr checkout <PR#>`. Say whose PR it is and which `needs` it has.
 * **mergeable** first: merge the base branch in, keep both intents, change
   nothing else, and push. **ci** next: fix only what the failing check names.
-* **review** last, only when `needs` lists it. Post the review as one PR comment
-  that starts with `<!-- 🌙 lo:<OWNER> adopt-review -->`, then do one fix pass
-  over its blockers in one commit, and reply with what was fixed and what was
-  left. Leave non-blocking findings in the review for the author.
+* **review** last, only when `needs` lists it. Log the review as an
+  `adopt-review` entry, then do one fix pass over its blockers in one commit, and
+  write a `fix` entry with what was fixed and what was left. Leave non-blocking findings in the review for the author.
 * Do not change the PR's draft state, title or body, and do not merge it.
 * Run the `AGENT_GUIDE` checks before each push.
 
 **needs-screenshot** — the narrowest: check out the branch, start a dev server,
 drive the changed screen, capture before and after, edit them into **Problem**
-and **Solution**, **change no code**. A bug found on the way goes in a comment,
+and **Solution**, **change no code**. A bug found on the way goes in a `note` entry,
 not the diff. **Upload through the GitHub web UI, never `git add` an image** —
 the diff must not grow by a single file.
 
-### Why one comment, and one fix pass
+### Why one log comment, and one fix pass
 
-- **One PR comment, not a GitHub review** — an inline review leaves the PR
-  blocked by a verdict from an account that never returns, and its line notes
-  vanish when the fix rewrites those lines.
-- **The comment before the fix** — the review is the morning's best signal, and
+- **One log comment, not a comment per action** — a person stops reading a PR
+  that carries five machine comments. One timeline of one-line summaries is read,
+  and the details are one click away.
+- **Not a GitHub review** — an inline review leaves the PR blocked by a verdict
+  from an account that never returns, and its line notes vanish when the fix
+  rewrites those lines.
+- **The review entry before the fix** — the review is the morning's best signal, and
   fixing first means it never exists.
 - **One fix pass** — self-review does not converge, and the agent holds its slot
   the whole time.
