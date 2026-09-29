@@ -118,6 +118,18 @@ DSTATE=~/.claude/linear-orchestrator/gate-drafts-state
 # exist, a layer whose base is mid-repair — and nothing in the gate records that
 # decision, so an unconditional work=yes re-wakes on the entry forever.
 RSTATE=~/.claude/linear-orchestrator/gate-regate-state
+# Adopted PRs: PRs a person opened, not the loop, that the loop still looks
+# after. LO_ADOPT_AUTHORS lists the GitHub logins (comma separated, case
+# insensitive); LO_ADOPT_SINCE keeps it to PRs created after that instant, so
+# turning the feature on does not sweep up a backlog nobody asked about. The
+# loop reviews such a PR once, and only when no person reviewed it first; it
+# merges the base in when the PR conflicts, and fixes a red CI. It never
+# promotes, re-drafts, merges or rewrites the body of an adopted PR.
+ADOPT_AUTHORS="${LO_ADOPT_AUTHORS:-}"
+ADOPT_SINCE="${LO_ADOPT_SINCE:-}"
+# The adopt fingerprint, kept apart for the same reason as DSTATE: an adopted PR
+# wakes the loop only when what it needs changed.
+ASTATE=~/.claude/linear-orchestrator/gate-adopt-state
 QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
@@ -132,6 +144,7 @@ save_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$STATE"; }
 # the model did not see must move neither of them.
 save_drafts_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$DSTATE"; }
 save_regate_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$RSTATE"; }
+save_adopt_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$ASTATE"; }
 NOREASON=""
 
 # probe: measure the world once. Prints the context block and returns 0 when
@@ -262,7 +275,7 @@ probe() {
   for pr_delay in 0 5 20; do
     [ "$pr_delay" -gt 0 ] && sleep "$pr_delay"
     pr_try=$(gh pr list --repo "$slug" --state open --limit "$PR_LIMIT" \
-      --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName 2>&1)
+      --json number,isDraft,mergeable,body,labels,statusCheckRollup,headRefName,baseRefName,author,createdAt 2>&1)
     printf '%s' "$pr_try" | jq -e 'type == "array"' >/dev/null 2>&1 && break
   done
   # A broken gh is worth waking for, but only once it is more than a blip — the
@@ -282,7 +295,8 @@ probe() {
 
   verdicts=$(printf '%s' "$prs" | jq -c --arg m "$PR_MARKER" '[ .[] | {
       pr: .number, draft: .isDraft, merge: .mergeable, head: .headRefName,
-      base: .baseRefName,
+      base: .baseRefName, author: ((.author.login // "") | ascii_downcase),
+      created: (.createdAt // ""),
       mine: ((.body // "") | contains($m)),
       invalid: ([.labels[]?.name] | index("invalid") != null),
       # Only a real verdict counts. Three things look like one and are not:
@@ -495,6 +509,44 @@ probe() {
   n_stack=$(printf '%s' "$stack"   | jq 'length')
   n_restack=$(printf '%s' "$restack" | jq 'length')
 
+  # --- adopted PRs (LO_ADOPT_AUTHORS) ---
+  # Candidates come from the one board read above; only they cost a second call,
+  # for their reviews and comments. "Reviewed" means a formal review, or a
+  # comment, from a person who is not the author, not a bot and not this loop.
+  # The loop's own review carries `adopt-review` in its marker line, so it
+  # counts once and the PR is never reviewed twice.
+  adopt='[]'
+  if [ -n "$ADOPT_AUTHORS" ]; then
+    cands=$(printf '%s' "$verdicts" | jq -c --arg who "$ADOPT_AUTHORS" --arg since "$ADOPT_SINCE" \
+        --argjson held "$held" --argjson inhand "$inhand" '
+        ($who | ascii_downcase | split(",") | map(gsub("^ +| +$";"")) | map(select(length>0))) as $w
+        | [ .[] | select(.mine | not) | select(.author as $a | $w | index($a) != null)
+            | select($since == "" or .created >= $since)
+            | .pr as $p | select($inhand | index($p) | not)
+            | .head as $h | select($held | index($h) | not) ]')
+    for row in $(printf '%s' "$cands" | jq -c '.[]'); do
+      n=$(printf '%s' "$row" | jq -r .pr)
+      au=$(printf '%s' "$row" | jq -r .author)
+      detail=$(gh pr view "$n" --repo "$slug" --json reviews,comments 2>/dev/null) || continue
+      reviewed=$(printf '%s' "$detail" | jq -r --arg au "$au" --arg m "$PR_MARKER" '
+        ([ .reviews[]? | select((.author.login // "" | ascii_downcase) != $au)
+             | select((.author.login // "") | test("\\[bot\\]$") | not) ]
+         + [ .comments[]? | select((.author.login // "" | ascii_downcase) != $au)
+             | select((.author.login // "") | test("\\[bot\\]$|^(github-actions|linear|blacksmith-sh|traces-github-app)"; "i") | not)
+             | select((.body // "") | contains($m) | not) ]) | length > 0')
+      loopreviewed=$(printf '%s' "$detail" | jq -r --arg m "$PR_MARKER adopt-review" \
+        '[ .comments[]? | select((.body // "") | contains($m)) ] | length > 0')
+      needs=$(printf '%s' "$row" | jq -c --arg r "$reviewed" --arg l "$loopreviewed" '
+        [ (if .merge == "CONFLICTING" then "mergeable" else empty end),
+          (if .ci == "failing" then "ci" else empty end),
+          (if $r == "false" and $l == "false" then "review" else empty end) ]')
+      [ "$needs" = "[]" ] && continue
+      adopt=$(printf '%s' "$adopt" | jq -c --argjson r "$row" --argjson nd "$needs" \
+        '. + [ { pr: $r.pr, head: $r.head, author: $r.author, merge: $r.merge, ci: $r.ci, needs: $nd } ]')
+    done
+  fi
+  n_adopt=$(printf '%s' "$adopt" | jq 'length')
+
   # --- Linear ready column, but only when a slot could take it ---
   # Cheap pre-filter (assignee tier + not archived); the model still applies the
   # judgment drop-rules and dedups against open PRs. New candidate -> hash change.
@@ -568,6 +620,8 @@ probe() {
   regatesig=$(printf '%s' "$regate" | jq -Sc '[ .[] | {pr,draft,merge,ci,invalid} ]' \
       2>/dev/null | shasum | cut -c1-16)
   prevregate=$(cat "$RSTATE" 2>/dev/null)
+  adoptsig=$(printf '%s' "$adopt" | jq -Sc '[ .[] | {pr,merge,ci,needs} ]' 2>/dev/null | shasum | cut -c1-16)
+  prevadopt=$(cat "$ASTATE" 2>/dev/null)
 
   # --- decide ---
   work=no
@@ -588,6 +642,8 @@ probe() {
   # a held draft woke the waiter roughly every 28s (the probe's own runtime)
   # for as long as it sat there.
   [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && [ "$draftsig" != "$prevdrafts" ] && work=yes
+  # An adopted PR is agent work, so it waits for a slot like a draft does.
+  [ "$slots" -gt 0 ] && [ "$n_adopt" -gt 0 ] && [ "$adoptsig" != "$prevadopt" ] && work=yes
   # A stale queue is only work when Linear has something to rebuild it FROM.
   # Without this the loop wakes every 30 minutes on an empty ready column, to
   # rebuild an empty file into an identical empty file.
@@ -617,6 +673,7 @@ probe() {
       fi
       why="no slot: $why"
       [ "$n_drafts" -gt 0 ] && why="$why; $n_drafts draft(s) waiting"
+      [ "$n_adopt" -gt 0 ] && why="$why; $n_adopt adopted PR(s) waiting"
       # Linear is queried only when a slot exists, so at slots=0 a new ticket is
       # invisible to this gate by design. Say so, or the NO reads as "no work".
       why="$why; linear not read"
@@ -647,6 +704,7 @@ probe() {
       save_state "$hash"
       save_drafts_state "$draftsig"
       save_regate_state "$regatesig"
+      save_adopt_state "$adoptsig"
       return 1
     fi
   fi
@@ -654,6 +712,7 @@ probe() {
   save_state "$hash"
   save_drafts_state "$draftsig"
   save_regate_state "$regatesig"
+  save_adopt_state "$adoptsig"
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots max=$max_agents$capnote"
@@ -665,6 +724,7 @@ probe() {
   [ "$n_drafts"  -gt 0 ]    && echo "DRAFTS: $drafts"
   [ "$n_stack"   -gt 0 ]    && echo "STACK: $stack"
   [ "$n_restack" -gt 0 ]    && echo "RESTACK: $restack"
+  [ "$n_adopt"   -gt 0 ]    && echo "ADOPT: $adopt"
   [ "$slots" -gt 0 ] && [ -n "$todo_ids" ] && echo "TODO-CANDIDATES: $todo_ids (from ${todo_source:-Todo})"
   [ "$queue_stale" = yes ]  && echo "queue: stale, rebuild before 2d"
   return 0

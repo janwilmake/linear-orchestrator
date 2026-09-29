@@ -100,6 +100,7 @@ INVALID: [ … ]           # PRs the user labelled invalid
 DRAFTS: [ … ]            # open loop drafts not already in an agent's hands
 STACK: [ … ]             # of those, the ones based on another branch
 RESTACK: [ … ]           # stack layers behind their base, with how far
+ADOPT: [ … ]             # PRs by LO_ADOPT_AUTHORS, each with what it needs
 TODO-CANDIDATES: ID,ID   # eligible Todo ids (only when slots>0)
 ```
 
@@ -141,7 +142,8 @@ above is empty.
 2. **De-gate** — a promoted PR that stopped being mergeable or went red (2b). A
    `RESTACK` line is a de-gate too.
 3. **Finish a draft** (2c).
-4. **Start a ticket** from `QUEUE_CACHE` (2d).
+4. **Look after an adopted PR** (2e).
+5. **Start a ticket** from `QUEUE_CACHE` (2d).
 
 #### 2a — Act on what a person said
 
@@ -285,6 +287,29 @@ Classify each draft. **Check `## Blocked on` first** and promote on the spot:
 
 Order after blocked: needs-mergeable, needs-fix, needs-split, needs-review,
 needs-screenshot. Oldest PR first within a kind.
+
+#### 2e — Look after adopted PRs
+
+`LO_ADOPT_AUTHORS` names GitHub logins whose PRs the loop looks after without
+owning them. Only PRs created after `LO_ADOPT_SINCE` count. The gate lists each
+one on the `ADOPT` line with `needs`: one or more of `mergeable` (it conflicts
+with its base), `ci` (CI is red on the head), and `review` (no person other than
+the author has reviewed or commented, and the loop has not reviewed it yet).
+
+Dispatch **one agent per PR** with every item it needs, in this order: merge the
+base in, fix CI, then review. Write the dispatch marker as for any PR.
+
+An adopted PR is a person's PR, not the loop's:
+
+* **Never** promote it, re-draft it, merge it, close it, or edit its title or
+  body. The author owns them.
+* The loop's review comment starts with `<!-- 🌙 lo:<OWNER> adopt-review -->`.
+  That marker is how the gate knows the review happened, so it runs once only.
+  Other comments start with `<!-- 🌙 lo:<OWNER> -->`, as everywhere else.
+* The review pass is the same as **needs-review** in 2c: one review comment,
+  then one fix pass over its blockers, one commit, one reply.
+* The merge and the CI fix are the same as **needs-mergeable**: merge the base,
+  never rebase, never force-push.
 
 #### 2d — Start a new ticket
 
@@ -680,6 +705,18 @@ it is the only thing to fix.
 
 A conflicted PR shows **no CI at all** rather than red CI — fix the conflict
 first and let CI run afterwards.
+
+**adopted** (2e) — a person's PR, so the agent works as a careful colleague:
+
+* Start with `gh pr checkout <PR#>`. Say whose PR it is and which `needs` it has.
+* **mergeable** first: merge the base branch in, keep both intents, change
+  nothing else, and push. **ci** next: fix only what the failing check names.
+* **review** last, only when `needs` lists it. Post the review as one PR comment
+  that starts with `<!-- 🌙 lo:<OWNER> adopt-review -->`, then do one fix pass
+  over its blockers in one commit, and reply with what was fixed and what was
+  left. Leave non-blocking findings in the review for the author.
+* Do not change the PR's draft state, title or body, and do not merge it.
+* Run the `AGENT_GUIDE` checks before each push.
 
 **needs-screenshot** — the narrowest: check out the branch, start a dev server,
 drive the changed screen, capture before and after, edit them into **Problem**
