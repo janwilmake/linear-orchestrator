@@ -173,8 +173,11 @@ oldest entries to their summary line when GitHub's size limit comes near. Kinds:
 * **An entry the loop writes on its own has no Human Input section.** Nobody
   asked, so there is nothing to quote.
 * **A human comment gets exactly one entry**, kind `human`, with `--ack <its id>`.
-  Its summary names the request in a few words; its detail quotes the comment
-  verbatim, then says what the loop did about it. The `ack:<id>` in the marker is
+  Its summary line is bold and reads
+  `**YYYY-MM-DD HH:MM - 🧍 Request (Human Input) - <the request in a few words>**`,
+  so a person's request stands out among the loop's own lines (`lo-log.sh`
+  writes it). Its detail quotes the comment verbatim, then says what the loop did
+  about it. The `ack:<id>` in the marker is
   how the gate knows the comment is answered. A name that belongs to a candidate
   or a customer is replaced by the role (`[a candidate]`).
 * **Every person's comment gets a `human` entry, including one that needs no
