@@ -177,6 +177,13 @@ oldest entries to their summary line when GitHub's size limit comes near. Kinds:
   verbatim, then says what the loop did about it. The `ack:<id>` in the marker is
   how the gate knows the comment is answered. A name that belongs to a candidate
   or a customer is replaced by the role (`[a candidate]`).
+* **Every person's comment gets a `human` entry, including one that needs no
+  work.** A comment a person typed stays where it is; the log only adds its line.
+  A comment that carries its own **Human Input** and **AI written** sections was
+  written by an AI session on a person's behalf: once the loop has acted on it,
+  fold it into the log — the `human` entry quotes its Human Input verbatim and
+  holds its AI written text — read the log back, then delete the original
+  comment. Bot comments (CI, Linear, deploy previews) get no entry.
 * **A `## Blocked on` notice lives in the PR body**, never in the log.
 * An unmarked comment on a loop PR is a person talking to it. Old PRs keep the
   separate comments they already have; new actions go to the log.
