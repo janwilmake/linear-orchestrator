@@ -66,6 +66,7 @@ if [ "$(uname -s)" = Darwin ]; then
     END{gsub("\\.","",f); gsub("\\.","",s); gsub("\\.","",p); gsub("\\.","",i)
         printf "%.1f", (f+s+p+i)*ps/1073741824}'; }
   iso_epoch()  { date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s; }
+  days_ago()   { date -u -v-"$1"d +%Y-%m-%dT%H:%M:%SZ; }
   hash16()     { shasum | cut -c1-16; }
 else
   mtime()      { stat -c %Y "$1"; }
@@ -73,6 +74,7 @@ else
   load1()      { awk '{print $1}' /proc/loadavg; }
   free_gb()    { awk '/^MemAvailable:/{printf "%.1f", $2/1048576}' /proc/meminfo; }
   iso_epoch()  { date -u -d "$1" +%s; }
+  days_ago()   { date -u -d "$1 days ago" +%Y-%m-%dT%H:%M:%SZ; }
   hash16()     { sha1sum | cut -c1-16; }
 fi
 cpu_cores()    { getconf _NPROCESSORS_ONLN; }
@@ -129,6 +131,7 @@ linear_ids() {
         | .id ] | sort | join(",")' 2>/dev/null
 }
 
+mkdir -p ~/.claude/linear-orchestrator
 STATE=~/.claude/linear-orchestrator/gate-state
 # The drafts fingerprint lives apart from the main hash on purpose. The main
 # hash covers the whole world, so anything at all moving it — an agent pushing
@@ -431,7 +434,7 @@ probe() {
   # when the repo has people who comment but must not dispatch work. Leave it
   # empty and every non-bot login counts.
   since="$FEEDBACK_SINCE"
-  win=$(date -u -v-14d +%Y-%m-%dT%H:%M:%SZ)
+  win=$(days_ago 14)
   # ISO-8601 sorts lexically, so the later of the two is just the bigger string.
   [ "$win" \> "$since" ] && since="$win"
   cmts=$(gh api "repos/$slug/issues/comments?since=$since&sort=created&direction=desc&per_page=100" \
