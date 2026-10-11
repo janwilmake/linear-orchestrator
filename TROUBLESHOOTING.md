@@ -112,7 +112,8 @@ to `SKILL.md`. The tick itself does not read this.
 - **Chrome tabs pile up.** Tabs are scoped per MCP session, so no agent can
   clear another's. After a night's run:
   `osascript -e 'tell application "Google Chrome" to get URL of every tab of every window'`
-- **macOS only.** `cca` needs `open -a Terminal` and APFS `cp -Rc`.
+- **Linux: no agent windows.** Each agent runs in a `screen` session; `screen -ls`
+  lists them and `screen -r agent-N` watches one. Install `screen`, `jq` and `gh`.
 
 ## The loop stalls with `load N over 10.0` and almost no agents running
 

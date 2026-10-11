@@ -21,7 +21,8 @@
 #
 # Linear is included cheaply: only when slots > 0 (a new ticket the machine
 # cannot start is not worth waking for), through the agent-codemode CLI, which
-# inherits Claude Code's Linear OAuth from the Keychain — no token, no model.
+# inherits Claude Code's Linear OAuth (the macOS Keychain, or
+# ~/.claude/.credentials.json on Linux) — no token, no model.
 # The eligible-ticket ids fold into the state hash, so a new Urgent is seen on
 # the next gate, not only on the 30-minute queue rebuild.
 
@@ -54,10 +55,33 @@ RAM_PER_AGENT="${LO_RAM_PER_AGENT:-2.5}"
 # tick spawns every slot free RAM allows, so the loop reaches full capacity on
 # the first tick with work instead of climbing one agent at a time.
 MAX_AGENTS_CAP="${LO_MAX_AGENTS:-0}"
+# --- platform: macOS and Linux report the same numbers through these ---
+if [ "$(uname -s)" = Darwin ]; then
+  mtime()      { stat -f %m "$1"; }
+  ram_bytes()  { sysctl -n hw.memsize; }
+  load1()      { sysctl -n vm.loadavg | awk '{print $2}'; }
+  # Free + speculative + purgeable + inactive: what macOS hands out without swapping.
+  free_gb()    { vm_stat | awk '/page size of/{ps=$8} /Pages free/{f=$3}
+    /Pages speculative/{s=$3} /Pages purgeable/{p=$3} /Pages inactive/{i=$3}
+    END{gsub("\\.","",f); gsub("\\.","",s); gsub("\\.","",p); gsub("\\.","",i)
+        printf "%.1f", (f+s+p+i)*ps/1073741824}'; }
+  iso_epoch()  { date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s; }
+  hash16()     { shasum | cut -c1-16; }
+else
+  mtime()      { stat -c %Y "$1"; }
+  ram_bytes()  { awk '/^MemTotal:/{print $2*1024}' /proc/meminfo; }
+  load1()      { awk '{print $1}' /proc/loadavg; }
+  free_gb()    { awk '/^MemAvailable:/{printf "%.1f", $2/1048576}' /proc/meminfo; }
+  iso_epoch()  { date -u -d "$1" +%s; }
+  hash16()     { sha1sum | cut -c1-16; }
+fi
+cpu_cores()    { getconf _NPROCESSORS_ONLN; }
+disk_free_gb() { df -Pk / | awk 'NR==2{print int($4/1048576)}'; }
+
 # How many agent slots to probe for liveness. This must cover the most agents
 # that can run at once or a busy agent above the scan reads as a free slot and
 # the loop double-spawns onto it. Defaults to what total RAM allows, floor 8.
-SLOT_SCAN="${LO_SLOT_SCAN:-$(awk -v r="$(( $(sysctl -n hw.memsize) / 1073741824 ))" \
+SLOT_SCAN="${LO_SLOT_SCAN:-$(awk -v r="$(( $(ram_bytes) / 1073741824 ))" \
   -v a="${LO_RAM_PER_AGENT:-2.5}" 'BEGIN{m=int(r/a); print (m<8?8:m)}')}"
 WAIT_INTERVAL="${LO_WAIT_INTERVAL:-60}"   # --wait: seconds between probes
 WAIT_MAX="${LO_WAIT_MAX:-2400}"           # --wait: give up and let the model re-arm
@@ -158,7 +182,7 @@ probe() {
   # --- hourly base-branch refresh (refuses, never forces) ---
   stamp=~/.claude/linear-orchestrator/last-fetch
   notes=""
-  if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -f %m "$stamp") )) -gt 3600 ]; then
+  if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(mtime "$stamp") )) -gt 3600 ]; then
     if [ -z "$(git -C $REPO status --porcelain --untracked-files=no)" ] \
        && [ "$(git -C $REPO branch --show-current)" = "$BASE" ]; then
       before=$(git -C $REPO rev-parse --short HEAD)
@@ -185,14 +209,11 @@ probe() {
   sleep 2
 
   # --- capacity ---
-  cores=$(sysctl -n hw.ncpu)
-  ramgb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
-  load=$(sysctl -n vm.loadavg | awk '{print $2}')
-  freegb=$(vm_stat | awk '/page size of/{ps=$8} /Pages free/{f=$3}
-    /Pages speculative/{s=$3} /Pages purgeable/{p=$3} /Pages inactive/{i=$3}
-    END{gsub("\\.","",f); gsub("\\.","",s); gsub("\\.","",p); gsub("\\.","",i)
-        printf "%.1f", (f+s+p+i)*ps/1073741824}')
-  diskgb=$(df -g / | tail -1 | awk '{print $4}')
+  cores=$(cpu_cores)
+  ramgb=$(( $(ram_bytes) / 1073741824 ))
+  load=$(load1)
+  freegb=$(free_gb)
+  diskgb=$(disk_free_gb)
   # A live agent's branch is not work: it is work in progress. Collect the
   # branches here so the PR lists below can drop them, or the waiter exits the
   # instant an agent drafts its own PR and every re-arm spins on the same PR.
@@ -227,7 +248,7 @@ probe() {
     slot=$(cat "$f" 2>/dev/null)
     lp=$(cat ~/.claude/agents/agent-$slot.lock 2>/dev/null)
     if { [ -n "$lp" ] && kill -0 "$lp" 2>/dev/null; } \
-       || [ $(( now_s - $(stat -f %m "$f") )) -lt 600 ]; then
+       || [ $(( now_s - $(mtime "$f") )) -lt 600 ]; then
       inhand="$inhand$(basename "$f")
 "
     else
@@ -594,13 +615,13 @@ probe() {
     if [ ! -f "$QUEUE" ]; then queue_stale=yes
     else
       built=$(jq -r '.builtAt // ""' "$QUEUE" 2>/dev/null)
-      age=$(( $(date +%s) - $(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "${built%.*}Z" +%s 2>/dev/null || echo 0) ))
+      age=$(( $(date +%s) - $(iso_epoch "${built%.*}Z" 2>/dev/null || echo 0) ))
       [ "$age" -gt 1800 ] && queue_stale=yes
     fi
   fi
 
   # --- did anything change since last tick? (PR verdicts + eligible ticket ids) ---
-  hash=$(printf '%s|%s|%s' "$verdicts" "$todo_ids" "$feedback" | shasum | cut -c1-16)
+  hash=$(printf '%s|%s|%s' "$verdicts" "$todo_ids" "$feedback" | hash16)
   prev=$(cat "$STATE" 2>/dev/null)
 
   # A fingerprint of the DRAFTS only, so a draft wakes the loop when something
@@ -610,7 +631,7 @@ probe() {
   # became promotable would sit unnoticed until the next unrelated change.
   draftsig=$(printf '%s' "$verdicts" | jq -Sc --argjson d "$drafts" \
       '[ .[] | select(.pr as $p | $d | index($p)) | {pr,draft,merge,ci,base} ]' \
-      2>/dev/null | shasum | cut -c1-16)
+      2>/dev/null | hash16)
   prevdrafts=$(cat "$DSTATE" 2>/dev/null)
 
   # The same fingerprint for the de-gate list, over the fields a REGATE entry is
@@ -618,9 +639,9 @@ probe() {
   # once, because its verdict changed; only an entry already seen and unchanged
   # stops re-waking.
   regatesig=$(printf '%s' "$regate" | jq -Sc '[ .[] | {pr,draft,merge,ci,invalid} ]' \
-      2>/dev/null | shasum | cut -c1-16)
+      2>/dev/null | hash16)
   prevregate=$(cat "$RSTATE" 2>/dev/null)
-  adoptsig=$(printf '%s' "$adopt" | jq -Sc '[ .[] | {pr,merge,ci,needs} ]' 2>/dev/null | shasum | cut -c1-16)
+  adoptsig=$(printf '%s' "$adopt" | jq -Sc '[ .[] | {pr,merge,ci,needs} ]' 2>/dev/null | hash16)
   prevadopt=$(cat "$ASTATE" 2>/dev/null)
 
   # --- decide ---

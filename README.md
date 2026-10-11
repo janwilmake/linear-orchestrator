@@ -75,10 +75,13 @@ People who already run coding agents locally and would rather spend a machine th
 a per-seat credit. The install is honestly longer than "connect GitHub", and the
 constraints are real:
 
-- **macOS only, and Claude only.** It drives Claude (Opus) agents through
+- **macOS or Linux, and Claude only.** It drives Claude (Opus) agents through
   [`multiclaude`](https://github.com/janwilmake/multiclaude) and reads Linear
   through [`agent-codemode`](https://github.com/janwilmake/agent-codemode), which
-  reads its OAuth from the macOS Keychain.
+  reads Claude Code's OAuth from the macOS Keychain, or from
+  `~/.claude/.credentials.json` on Linux.
+- **A Linux server has no real Chrome.** Its agents run in `screen` sessions
+  without Claude in Chrome, so they test front-end work with headless Playwright.
 - **One machine.** Parallelism caps at what one laptop's memory holds.
 - **`--dangerously-skip-permissions` is required.** The agents run unattended with
   permission prompts off. That is the point, and it is also the risk — give the

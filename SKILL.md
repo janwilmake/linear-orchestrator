@@ -87,7 +87,7 @@ Five steps. Stop at the first that says stop, and report why.
 ### Step 1 — capacity
 
 Run `bash "<this skill's directory>/gate.sh"` **unsandboxed** — `sysctl` and the
-`~/.claude/` locks are denied inside the sandbox. Do not inline what it does. It
+`~/.claude/` locks are denied inside the sandbox. It runs on macOS and Linux. Do not inline what it does. It
 prints either a `NO` line or:
 
 ```
@@ -583,6 +583,9 @@ it already has overrides what it correctly knew.
 > starves every other agent and stalls the loop for an hour.
 > Other agents are running dev servers, so take a free port in 5200–5299 and
 > point `VITE_BASE_URL` at it.
+>
+> **No Claude in Chrome tools?** You run on a Linux server. Test in the browser
+> with headless Playwright instead, and skip the next paragraph.
 >
 > **Open your own Chrome window before your first browser call, or resize
 > nothing.** `resize_window` acts on the whole window, so resizing from a tab in
