@@ -117,6 +117,32 @@ claude --dangerously-skip-permissions
 `status` reports what is running; `stop` ends the loop and lists the PRs it
 produced.
 
+## Run it on a Linux server
+
+The loop also runs on a Linux server (tested on Ubuntu 24.04), which keeps it
+running when the laptop sleeps. On the server:
+
+- Install `git`, `gh`, `jq`, `screen`, Node and Claude Code, and log in to `gh`,
+  Claude Code and the Linear MCP (`claude mcp login linear`) as the account the
+  loop acts as. `agent-codemode` reads the Linear login from
+  `~/.claude/.credentials.json`.
+- Mark the agent slot folders `~/.claude/agents/agent-N` as trusted in
+  `~/.claude.json`, and accept the Bypass Permissions warning once. Otherwise
+  each new agent stops at a question nobody answers.
+- Optional, for front-end work: Chrome on a virtual display (Xvfb), with the
+  Claude extension signed in and x11vnc serving that display on localhost:5900.
+  `cca` passes `--chrome` only when Chrome is installed; without it, agents test
+  with headless Playwright.
+- Start the loop in a `screen` session, so it outlives your ssh connection:
+  `screen -dmS orchestrator bash -lc 'cd /path/to/repo && claude --dangerously-skip-permissions "/linear-orchestrator start"'`.
+
+To watch it from a Mac, set `LO_REMOTE_HOST` (and, for the browser view,
+`LO_REMOTE_VNC_PASSWORD_FILE`) in `.env` and run `./watch-remote.sh`. It opens
+one Terminal window per agent and the orchestrator, adds windows for new agents,
+closes a window when its agent ends, and opens Screen Sharing on the server's
+Chrome. Ctrl-C, or `./watch-remote.sh stop`, closes every view; the loop keeps
+running.
+
 ## Configure with `.env`, not the skill file
 
 All the values that change per user live in **`.env`** beside `SKILL.md`. It is
