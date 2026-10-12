@@ -8,7 +8,8 @@
 #
 # New agents get a window within 10 s; a window closes when its agent ends.
 # Windows share their session with screen -x: keys typed there reach that agent,
-# so close a window with Cmd-W, never Ctrl-C. Ctrl-C here closes every view.
+# so close a window with Cmd-W, never Ctrl-C. Ctrl-C here, or closing this
+# window, closes every view.
 # The agents keep running either way.
 #
 # The browser view needs, on the server, x11vnc serving the display Chrome runs
@@ -71,7 +72,7 @@ stop_views() {
   echo "views closed; the agents on $HOST keep running"
 }
 if [ "$MODE" = stop ]; then stop_views; exit 0; fi
-trap 'echo; stop_views; exit 0' INT TERM
+trap 'echo; stop_views; exit 0' INT TERM HUP
 
 if [ -n "$PASSFILE" ] && [ -f "$PASSFILE" ]; then
   nc -z localhost "$PORT" 2>/dev/null \
