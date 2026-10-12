@@ -26,25 +26,19 @@ SCRIPT="$SELF/$(basename "$(readlink -f "${BASH_SOURCE[0]}")")"
 
 # What each window runs: "view <ssh-host> <session>". screen draws in the
 # terminal's alternate screen, which has no scrollback, so the terminal turns the
-# scroll wheel into arrow keys. Dropping the switch to that screen keeps the
-# output in the normal screen, where lines that scroll off go to the scrollback.
+# scroll wheel into arrow keys. The filter at the end of this file drops the
+# switch to that screen, so lines that scroll off go to the normal scrollback.
 # screen sends only what is on its screen when a view attaches, so the view
 # prints the session's history first, less the window's height of rows that the
 # attach draws again. A terminal moves a cleared screen into its scrollback, so
-# the view clears that scrollback first, and passes screen's double clear at
-# attach as one.
+# the view clears that scrollback first.
 if [ "$1" = view ]; then
   rows=$(stty size 2>/dev/null | cut -d' ' -f1)
   printf '\033[H\033[2J\033[3J'
   ssh "$2" "f=\$(mktemp); screen -S '$3' -X hardcopy -h \$f; sleep 0.3
     awk -v rows='${rows:-0}' '{ l[NR] = \$0 } NF { last = NR } END { for (i = 1; i <= last - rows; i++) printf \"%s%s\", (i > 1 ? \"\\n\" : \"\"), l[i] }' \$f
-    rm -f \$f" 2>/dev/null
-  ssh -t "$2" screen -U -x "$3" | perl -e '$| = 1;
-    while (sysread(STDIN, my $b, 65536)) {
-      $b =~ s/\e\[\?(?:1049|1047|47)[hl]//g;
-      $b =~ s/(?:\e\[H\e\[2J){2,}/\e[H\e[2J/g;
-      syswrite(STDOUT, $b);
-    }'
+    rm -f \$f" 2>/dev/null | perl -x "$SCRIPT" history
+  ssh -t "$2" screen -U -x "$3" | perl -x "$SCRIPT" attach
   exit
 fi
 
@@ -221,3 +215,40 @@ while :; do
   # wait, not a plain sleep: bash runs the trap only once its foreground child ends.
   sleep 10 & wait $!
 done
+exit
+
+: <<'PERL'
+#!/usr/bin/perl
+# The filters of "view". perl -x starts here.
+use strict;
+use warnings;
+use Encode ();
+$| = 1;
+if (($ARGV[0] // '') eq 'history') {
+  # screen 4's hardcopy loses part of every character outside Latin-1, so the
+  # broken rest is dropped rather than shown as replacement marks.
+  local $/;
+  my $text = <STDIN> // '';
+  $text =~ s/\0//g;
+  $text = Encode::decode('UTF-8', $text);
+  $text =~ s/\x{FFFD}//g;
+  print Encode::encode('UTF-8', $text);
+  exit;
+}
+# Each clear moves the screen into the scrollback, so a clear with nothing
+# printed since the one before would add an empty screenful there.
+my $blank = 0;
+sub token {
+  my ($clear, $code, $text) = @_;
+  if (defined $clear) { return '' if $blank; $blank = 1; return $clear }
+  return $code if defined $code;
+  $blank = 0 if $text =~ /\S/;
+  return $text;
+}
+while (sysread(STDIN, my $b, 65536)) {
+  $b =~ s/\e\[\?(?:1049|1047|47)[hl]//g;
+  $b =~ s{(\e\[H\e\[2J)|(\e\][^\a\e]*(?:\a|\e\\)|\e\[[0-9;?<>=!]*[ -/]*[@-~]|\e[()][0-9A-Za-z]|\e.)|([^\e]+)}{token($1, $2, $3)}ge;
+  syswrite(STDOUT, $b);
+}
+__END__
+PERL
