@@ -15,7 +15,7 @@
 # The browser view needs, on the server, x11vnc serving the display Chrome runs
 # on at localhost:5900, and on the Mac its password in LO_REMOTE_VNC_PASSWORD_FILE.
 # Without that file the browser view is skipped.
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 [ -f "$SELF/.env" ] && set -a && . "$SELF/.env" && set +a
 MODE=watch
 [ "$1" = stop ] && { MODE=stop; shift; }
