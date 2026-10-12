@@ -1,20 +1,26 @@
 #!/bin/bash
-# Watch an orchestrator that runs on a remote Linux server, from a Mac: one
-# Terminal window per screen session (the orchestrator and each agent), and
-# Screen Sharing on the server's Chrome.
+# Watch an orchestrator that runs on a remote Linux server, from a Mac or a Linux
+# desktop: one terminal window per screen session (the orchestrator and each
+# agent), and a VNC view of the server's Chrome.
 #
 #   watch-remote.sh [ssh-host]        start watching (default: LO_REMOTE_HOST)
 #   watch-remote.sh stop [ssh-host]   close every view
 #
 # New agents get a window within 10 s; a window closes when its agent ends.
 # Windows share their session with screen -x: keys typed there reach that agent,
-# so close a window with Cmd-W, never Ctrl-C. Ctrl-C here, or closing this
-# window, closes every view.
+# so close a window with the window manager (Cmd-W on a Mac), never Ctrl-C.
+# Ctrl-C here, or closing this window, closes every view.
 # The agents keep running either way.
 #
 # The browser view needs, on the server, x11vnc serving the display Chrome runs
-# on at localhost:5900, and on the Mac its password in LO_REMOTE_VNC_PASSWORD_FILE.
+# on at localhost:5900, and locally its password in LO_REMOTE_VNC_PASSWORD_FILE.
 # Without that file the browser view is skipped.
+#
+# On Linux, LO_REMOTE_TERMINAL picks the terminal: a command that runs the words
+# after it, such as "kitty" or "gnome-terminal --". The default is the first one
+# installed of gnome-terminal, konsole, xfce4-terminal, kitty, alacritty,
+# wezterm, foot, x-terminal-emulator and xterm. The browser view uses TigerVNC's
+# vncviewer, else Remmina, else xdg-open.
 SELF="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 [ -f "$SELF/.env" ] && set -a && . "$SELF/.env" && set +a
 MODE=watch
@@ -24,12 +30,20 @@ HOST="${1:-${LO_REMOTE_HOST:-}}"
 PORT="${LO_REMOTE_VNC_LOCAL_PORT:-5901}"
 PASSFILE="${LO_REMOTE_VNC_PASSWORD_FILE:-}"
 TAG="$HOST: "
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/watch-remote"
+mkdir -p "$STATE"
 
+port_open() { (exec 3<>"/dev/tcp/localhost/$PORT") 2>/dev/null; }
+open_tunnel() {
+  port_open || ssh -f -N -o ExitOnForwardFailure=yes -L "$PORT:localhost:5900" "$HOST"
+}
+
+if [ "$(uname -s)" = Darwin ]; then
 # Windows are known by their tty: the agent's Claude sets its own window title,
 # and that replaces any custom title, so a title cannot find a window again.
 # One line per window this script opened: "<session> <tty>".
-MAP="${XDG_STATE_HOME:-$HOME/.local/state}/watch-remote/$HOST.ttys"
-mkdir -p "$(dirname "$MAP")" && touch "$MAP"
+MAP="$STATE/$HOST.ttys"
+touch "$MAP"
 tty_of() { awk -v n="$1" '$1 == n { print $2 }' "$MAP" | tail -1; }
 new_window() {
   osascript - "$1" "$HOST" "$TAG" <<'AS'
@@ -100,6 +114,61 @@ AS
     [ -n "$tty" ] && { grep -v " $tty\$" "$MAP" > "$MAP.tmp"; mv "$MAP.tmp" "$MAP"; }
   done
 }
+open_browser() {
+  open_tunnel
+  pbcopy < "$PASSFILE"
+  open -a "/System/Applications/Utilities/Screen Sharing.app" "vnc://localhost:$PORT"
+  echo "browser: Screen Sharing on localhost:$PORT (the VNC password is on the clipboard)"
+}
+close_browser() { osascript -e 'tell application "Screen Sharing" to quit' >/dev/null 2>&1; }
+
+else
+VIEWER_PID="$STATE/$HOST.viewer.pid"
+if [ -n "${LO_REMOTE_TERMINAL:-}" ]; then
+  read -r -a TERM_CMD <<< "$LO_REMOTE_TERMINAL"
+else
+  for t in "gnome-terminal --" "konsole -e" "xfce4-terminal -x" "kitty" "alacritty -e" \
+           "wezterm start --" "foot" "x-terminal-emulator -e" "xterm -e"; do
+    command -v "${t%% *}" >/dev/null && { read -r -a TERM_CMD <<< "$t"; break; }
+  done
+fi
+[ -n "${TERM_CMD[*]}" ] || { echo "no terminal found; set LO_REMOTE_TERMINAL in .env"; exit 1; }
+# The terminal runs ssh as its only command, so the window closes when ssh ends.
+# The escape codes set the title, and give the orchestrator its own background
+# colour so it is easy to find among the agents; most terminals understand both.
+open_window() {
+  local bg=""
+  [ "$1" = orchestrator ] && bg='\033]11;#0a421b\007'
+  setsid "${TERM_CMD[@]}" sh -c "printf '\\033]0;%s\\007$bg' \"\$1\"; exec ssh -t \"\$2\" screen -U -x \"\$3\"" \
+    watch-remote "$TAG$1" "$HOST" "$1" >/dev/null 2>&1 < /dev/null &
+}
+close_finished() { :; }
+open_browser() {
+  open_tunnel
+  local cmd
+  if command -v vncviewer >/dev/null && command -v vncpasswd >/dev/null; then
+    vncpasswd -f < "$PASSFILE" > "$STATE/$HOST.vncpasswd" && chmod 600 "$STATE/$HOST.vncpasswd"
+    cmd=(vncviewer -passwd "$STATE/$HOST.vncpasswd" "localhost::$PORT")
+  else
+    if command -v wl-copy >/dev/null && [ -n "${WAYLAND_DISPLAY:-}" ]; then wl-copy < "$PASSFILE"
+    elif command -v xclip >/dev/null; then xclip -selection clipboard < "$PASSFILE"
+    elif command -v xsel >/dev/null; then xsel --clipboard --input < "$PASSFILE"
+    fi
+    if command -v vncviewer >/dev/null; then cmd=(vncviewer "localhost::$PORT")
+    elif command -v remmina >/dev/null; then cmd=(remmina -c "vnc://localhost:$PORT")
+    else cmd=(xdg-open "vnc://localhost:$PORT")
+    fi
+  fi
+  setsid "${cmd[@]}" >/dev/null 2>&1 < /dev/null &
+  echo $! > "$VIEWER_PID"
+  echo "browser: ${cmd[0]} on localhost:$PORT"
+}
+close_browser() {
+  [ -f "$VIEWER_PID" ] && kill "$(cat "$VIEWER_PID")" 2>/dev/null
+  rm -f "$VIEWER_PID"
+}
+fi
+
 sessions() {
   ssh -o ConnectTimeout=10 "$HOST" 'screen -ls' 2>/dev/null \
     | awk '{ if (match($1, /\.(orchestrator|agent-[0-9]+)$/)) print substr($1, RSTART + 1) }' | sort -V
@@ -107,7 +176,7 @@ sessions() {
 stop_views() {
   pkill -f "ssh -t $HOST screen -U -x " 2>/dev/null
   pkill -f "ssh -f -N .*-L $PORT:localhost:5900 $HOST" 2>/dev/null
-  osascript -e 'tell application "Screen Sharing" to quit' >/dev/null 2>&1
+  close_browser
   sleep 1
   close_finished
   echo "views closed; the agents on $HOST keep running"
@@ -115,18 +184,13 @@ stop_views() {
 if [ "$MODE" = stop ]; then stop_views; exit 0; fi
 trap 'echo; stop_views; exit 0' INT TERM HUP
 
-if [ -n "$PASSFILE" ] && [ -f "$PASSFILE" ]; then
-  nc -z localhost "$PORT" 2>/dev/null \
-    || ssh -f -N -o ExitOnForwardFailure=yes -L "$PORT:localhost:5900" "$HOST"
-  pbcopy < "$PASSFILE"
-  open -a "/System/Applications/Utilities/Screen Sharing.app" "vnc://localhost:$PORT"
-  echo "browser: Screen Sharing on localhost:$PORT (the VNC password is on the clipboard)"
-fi
+[ -n "$PASSFILE" ] && [ -f "$PASSFILE" ] && open_browser
 echo "watching $HOST — Ctrl-C closes every view (the agents keep running)"
 while :; do
   for n in $(sessions); do
-    pgrep -qf "ssh -t $HOST screen -U -x $n\$" || { open_window "$n"; echo "$(date +%H:%M) opened $n"; }
+    pgrep -f "ssh -t $HOST screen -U -x $n\$" >/dev/null || { open_window "$n"; echo "$(date +%H:%M) opened $n"; }
   done
   close_finished
-  sleep 10
+  # wait, not a plain sleep: bash runs the trap only once its foreground child ends.
+  sleep 10 & wait $!
 done
