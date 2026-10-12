@@ -22,6 +22,18 @@
 # wezterm, foot, x-terminal-emulator and xterm. The browser view uses TigerVNC's
 # vncviewer, else Remmina, else xdg-open.
 SELF="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SCRIPT="$SELF/$(basename "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+# What each window runs: "view <ssh-host> <session>". screen draws in the
+# terminal's alternate screen, which has no scrollback, so the terminal turns the
+# scroll wheel into arrow keys. Dropping the switch to that screen keeps the
+# output in the normal screen, where lines that scroll off go to the scrollback.
+if [ "$1" = view ]; then
+  ssh -t "$2" screen -U -x "$3" | perl -e '$| = 1;
+    while (sysread(STDIN, my $b, 65536)) { $b =~ s/\e\[\?(?:1049|1047|47)[hl]//g; syswrite(STDOUT, $b) }'
+  exit
+fi
+
 [ -f "$SELF/.env" ] && set -a && . "$SELF/.env" && set +a
 MODE=watch
 [ "$1" = stop ] && { MODE=stop; shift; }
@@ -46,14 +58,15 @@ MAP="$STATE/$HOST.ttys"
 touch "$MAP"
 tty_of() { awk -v n="$1" '$1 == n { print $2 }' "$MAP" | tail -1; }
 new_window() {
-  osascript - "$1" "$HOST" "$TAG" <<'AS'
+  osascript - "$1" "$HOST" "$TAG" "$SCRIPT" <<'AS'
 on run argv
   set n to item 1 of argv
   set h to item 2 of argv
   set tag to item 3 of argv
+  set self to item 4 of argv
   tell application "Terminal"
     -- exec: the shell of the window ends with ssh, so nothing is left running in it
-    set t to do script "clear; exec ssh -t " & h & " screen -U -x " & n
+    set t to do script "clear; exec " & quoted form of self & " view " & h & " " & n
     set custom title of t to tag & n
     return tty of t
   end tell
@@ -139,8 +152,8 @@ fi
 open_window() {
   local bg=""
   [ "$1" = orchestrator ] && bg='\033]11;#0a421b\007'
-  setsid "${TERM_CMD[@]}" sh -c "printf '\\033]0;%s\\007$bg' \"\$1\"; exec ssh -t \"\$2\" screen -U -x \"\$3\"" \
-    watch-remote "$TAG$1" "$HOST" "$1" >/dev/null 2>&1 < /dev/null &
+  setsid "${TERM_CMD[@]}" sh -c "printf '\\033]0;%s\\007$bg' \"\$1\"; exec \"\$4\" view \"\$2\" \"\$3\"" \
+    watch-remote "$TAG$1" "$HOST" "$1" "$SCRIPT" >/dev/null 2>&1 < /dev/null &
 }
 close_finished() { :; }
 open_browser() {
@@ -177,8 +190,8 @@ stop_views() {
   pkill -f "ssh -t $HOST screen -U -x " 2>/dev/null
   pkill -f "ssh -f -N .*-L $PORT:localhost:5900 $HOST" 2>/dev/null
   close_browser
-  sleep 1
-  close_finished
+  # A view ends a moment after its ssh: the filter behind it still has to see the end.
+  sleep 1; close_finished; sleep 2; close_finished
   echo "views closed; the agents on $HOST keep running"
 }
 if [ "$MODE" = stop ]; then stop_views; exit 0; fi
