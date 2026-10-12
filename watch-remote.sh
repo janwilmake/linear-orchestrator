@@ -35,6 +35,8 @@ on run argv
     -- exec: the window's shell ends with ssh, so nothing is left running in it
     set t to do script "clear; exec ssh -t " & h & " screen -U -x " & n
     set custom title of t to tag & n
+    -- the orchestrator gets its own colour, so it is easy to find among the agents
+    if n is "orchestrator" then set background color of t to {2500, 17000, 7000}
   end tell
 end run
 AS
