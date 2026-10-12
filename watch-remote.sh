@@ -25,31 +25,46 @@ PORT="${LO_REMOTE_VNC_LOCAL_PORT:-5901}"
 PASSFILE="${LO_REMOTE_VNC_PASSWORD_FILE:-}"
 TAG="$HOST: "
 
-open_window() {
-  osascript - "$1" "$HOST" "$TAG" >/dev/null <<'AS'
+# Windows are known by their tty: the agent's Claude sets its own window title,
+# and that replaces any custom title, so a title cannot find a window again.
+# One line per window this script opened: "<session> <tty>".
+MAP="${XDG_STATE_HOME:-$HOME/.local/state}/watch-remote/$HOST.ttys"
+mkdir -p "$(dirname "$MAP")" && touch "$MAP"
+tty_of() { awk -v n="$1" '$1 == n { print $2 }' "$MAP" | tail -1; }
+new_window() {
+  osascript - "$1" "$HOST" "$TAG" <<'AS'
 on run argv
   set n to item 1 of argv
   set h to item 2 of argv
   set tag to item 3 of argv
   tell application "Terminal"
-    -- exec: the window's shell ends with ssh, so nothing is left running in it
+    -- exec: the shell of the window ends with ssh, so nothing is left running in it
     set t to do script "clear; exec ssh -t " & h & " screen -U -x " & n
     set custom title of t to tag & n
+    return tty of t
   end tell
 end run
 AS
+}
+open_window() {
+  local tty
+  tty=$(new_window "$1")
+  [ -n "$tty" ] && printf '%s %s\n' "$1" "$tty" >> "$MAP"
   # The orchestrator gets its own colour, so it is easy to find among the agents.
   # Set twice: a shell startup hook (such as termcolor) may repaint a new window.
   [ "$1" = orchestrator ] && { paint_orchestrator; (sleep 2; paint_orchestrator) & }
 }
 paint_orchestrator() {
-  osascript - "${TAG}orchestrator" >/dev/null 2>&1 <<'AS'
+  local tty
+  tty=$(tty_of orchestrator)
+  [ -n "$tty" ] || return 0
+  osascript - "$tty" >/dev/null 2>&1 <<'AS'
 on run argv
   tell application "Terminal"
     repeat with w in (every window)
       try
         set t to selected tab of w
-        if custom title of t is (item 1 of argv) then set background color of t to {2500, 17000, 7000}
+        if tty of t is (item 1 of argv) then set background color of t to {2500, 17000, 7000}
       end try
     end repeat
   end tell
@@ -58,23 +73,32 @@ AS
 }
 # A window whose ssh has ended runs nothing, so Terminal closes it without asking.
 close_finished() {
-  osascript - "$TAG" >/dev/null 2>&1 <<'AS'
+  local ttys
+  ttys=$(awk '{ print $2 }' "$MAP" | tr '\n' ' ')
+  [ -n "$ttys" ] || return 0
+  osascript - $ttys 2>/dev/null <<'AS' | tr ',' '\n' | sed 's/^ *//' | while read -r tty; do
 on run argv
-  set tag to item 1 of argv
+  set closed to {}
   tell application "Terminal"
     set ids to {}
     repeat with w in (every window)
       try
         set t to selected tab of w
-        if custom title of t starts with tag and (count of processes of t) is 0 then set end of ids to id of w
+        if (argv contains (tty of t)) and (count of processes of t) is 0 then
+          set end of ids to id of w
+          set end of closed to tty of t
+        end if
       end try
     end repeat
     repeat with i in ids
       close (window id i)
     end repeat
   end tell
+  return closed
 end run
 AS
+    [ -n "$tty" ] && { grep -v " $tty\$" "$MAP" > "$MAP.tmp"; mv "$MAP.tmp" "$MAP"; }
+  done
 }
 sessions() {
   ssh -o ConnectTimeout=10 "$HOST" 'screen -ls' 2>/dev/null \
