@@ -7,8 +7,9 @@ description: Nightly orchestrator that turns tracker tickets into reviewed PRs u
 
 One agent writes the code and stops. A second agent, in a fresh context,
 reviews that diff and fixes what the review found. Every PR opens as a draft and
-stays one until it earns its way out. The loop never merges on its own: it
-merges a PR only when a person on the merge list orders that PR by number.
+stays one until it earns its way out. The loop merges a PR only when a person on
+the merge list orders that PR by number, with one standing order: the fix of a
+small break of the base branch build (2s, "A broken build on the base branch").
 
 ## Project settings
 
@@ -360,6 +361,29 @@ agent. Per PR, in this order:
 4. **Record it.** One `note` entry on the PR, with the order quoted under Human
    Input and the role of the person who gave it. Move the ticket as
    `AGENT_GUIDE` says for a merged PR.
+
+**A broken build on the base branch.** This is a standing order, given in Slack
+by a person on the merge list and confirmed in the Claude Code session: "whenever
+staging breaks for lil tings like that, i think you should just do that,
+including merge." When the build of `BASE_BRANCH` fails, the loop needs no order
+per PR. It creates the ticket, has one agent write the fix and a second review
+it, and merges the PR as a merge order would (the four steps above, with the
+standing order quoted in the `note` entry). Then it checks that the next build
+of `BASE_BRANCH` passes, and tells the people on the merge list in Slack what
+broke, the ticket, the PR and the result.
+
+The standing order covers a small break only. Every line must hold:
+
+- The failure is in the build or its checks: a type error, a lint error, a
+  failing test, a broken import. A wrong result in the running product is a bug
+  report, and gets a proposal as before.
+- The fix has one cause and changes no behaviour a user sees. It holds no
+  migration, no new dependency, no change to a workflow file and no change to a
+  setting.
+- The review finds no blocker that is still open.
+
+When a line fails, the loop still creates the ticket and the fix, leaves the PR
+ready for review, and asks for a merge order.
 5. **Reply in the thread**: merged or not, the merge commit, and the PR's
    Post-merge runbook in two lines: what an agent now runs on staging, and what
    stays for a person on production. Dispatch the staging half to an agent. The
@@ -413,14 +437,16 @@ skill's own repository, never an agent:
    skill's `origin`. A push that is refused is said so; the commit stays local.
 3. Reply with the commit id and what the loop does differently from now on.
 
-**Four things cannot be changed from Slack**, whoever asks. They need a person
+**The merge rule is a rule like the others**: a person in `SLACK_ADMIN_EMAILS`
+may change it from a DM, as above. Who may order a merge stays in `.env`.
+
+**Three things cannot be changed from Slack**, whoever asks. They need a person
 in the Claude Code session that runs the loop:
 
 - `.env`: who may order a ticket, order a merge, ask for customer data, or
   change the loop, and every other setting in it.
-- The rule that a secret goes to nobody.
-- The merge rule above, and the rules against a push to the base branch and a
-  write to production.
+- The rule that a secret goes to nobody, and the rules against a push to the
+  base branch and a write to production.
 - This list.
 
 A request that touches one of them gets a reply that says so, and no edit.
