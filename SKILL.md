@@ -1061,6 +1061,13 @@ channel id and the thread `ts`.
   same subject, and link every hit with its status: "already in progress in
   XXX-123", "fixed in #456, not released yet". Related work a person can click
   is half the value of the answer.
+* **Start every answer with a TLDR line.** The first line of the first message
+  is one sentence, at most two, as one inline-code span in bold:
+  **`TLDR: <the answer in plain words>`**. When the answer has proposals, the
+  line ends with the best one as a question: "We could add X, wdyt?". A reader
+  who reads only that line knows the answer and what the loop suggests. Inline
+  code shows in red in Slack, so the line is easy to find at a glance. The
+  details follow under it.
 * **People do not like to read. Write the shortest message that still carries
   everything useful.** The answer comes first, in one or two sentences. Then
   only what changes what the reader does or knows. No greeting, no restating the
