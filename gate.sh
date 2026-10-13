@@ -215,7 +215,9 @@ slack_read() {
   for ch in $(cat "$SLACK_CHANLIST"); do
     out=$("$AC" call "$SLACK_SERVER" slack_read_channel \
       --json "{\"channel_id\":\"$ch\",\"limit\":30}" --text 2>/dev/null </dev/null)
-    if [ -z "$out" ]; then
+    # An answer without messages is an error text, such as a rate limit. It must
+    # not count as a change, or every refused read would wake the loop.
+    if ! printf '%s' "$out" | grep -q '"messages"'; then
       SLACK_ERR="slack read failed (claude mcp login $SLACK_SERVER?)"
       continue
     fi
@@ -227,7 +229,7 @@ slack_read() {
       [ -n "$ch" ] && [ -n "$t" ] || continue
       out=$("$AC" call "$SLACK_SERVER" slack_read_thread \
         --json "{\"channel_id\":\"$ch\",\"message_ts\":\"$t\"}" --text 2>/dev/null </dev/null)
-      [ -z "$out" ] && continue
+      printf '%s' "$out" | grep -q '"messages"' || continue
       SLACK_SIGS=$(printf '%s' "$SLACK_SIGS" | jq -c --arg k "$ch/$t" \
         --arg v "$(printf '%s' "$out" | hash16)" '.[$k] = $v')
     done < <(jq -r '.threads[]? | select(.status != "closed") | "\(.channel) \(.ts)"' \
