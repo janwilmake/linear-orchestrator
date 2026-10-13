@@ -160,6 +160,81 @@ ASTATE=~/.claude/linear-orchestrator/gate-adopt-state
 QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
+# --- Slack intake (off until LO_SLACK=1) ---
+# The gate does not understand Slack. It takes a fingerprint of each watched
+# channel and of each thread the tick left open, and names the ones whose
+# fingerprint moved since the tick last acknowledged them. The tick reads those
+# and decides what a message is. Parsing the message text here would tie the
+# gate to the MCP server's output format.
+#
+# The read goes through agent-codemode, like Linear, so the server must be one
+# Claude Code itself is logged in to (`claude mcp add`). A claude.ai connector
+# is invisible here.
+# There is no channel list to configure: the loop watches every channel, DM and
+# group DM its Slack account is a member of. Invite the account to a channel to
+# have it watched; remove it to stop.
+SLACK_ON="${LO_SLACK:-0}"
+SLACK_CHANLIST=~/.claude/linear-orchestrator/gate-slack-channels   # membership, refreshed hourly
+SLACK_SERVER="${LO_SLACK_SERVER:-slack}"      # MCP server name in Claude Code
+SLACK_INTERVAL="${LO_SLACK_INTERVAL:-300}"    # seconds between real reads; --wait probes every 60s
+SLACK_THREADS=~/.claude/linear-orchestrator/${PREFIX}-slack.json   # the tick's own record of threads
+SLACK_SEEN=~/.claude/linear-orchestrator/gate-slack-seen.json      # key -> fingerprint the tick acknowledged
+SLACK_NOW=~/.claude/linear-orchestrator/gate-slack-now.json        # the last read, with its time
+# What the model was last shown, kept apart for the same reason as DSTATE: a
+# thread the tick failed to acknowledge wakes the loop once, not on every probe.
+SLSTATE=~/.claude/linear-orchestrator/gate-slack-state
+SLACK_ERR=""
+SLACK_SIGS='{}'
+
+# slack_read [fresh]: fill SLACK_SIGS with {key: fingerprint}. A key is a
+# channel id, or "<channel>/<thread ts>" for an open thread. A read that
+# returns nothing leaves its key out, so an outage never reads as a change.
+slack_read() {
+  local now at out ch t key
+  SLACK_ERR=""; SLACK_SIGS='{}'
+  now=$(date +%s)
+  if [ "$1" != fresh ] && [ -f "$SLACK_NOW" ]; then
+    at=$(jq -r '.at // 0' "$SLACK_NOW" 2>/dev/null)
+    if [ $(( now - ${at:-0} )) -lt "$SLACK_INTERVAL" ]; then
+      SLACK_SIGS=$(jq -c '.sigs // {}' "$SLACK_NOW" 2>/dev/null || echo '{}')
+      return 0
+    fi
+  fi
+  if [ ! -s "$SLACK_CHANLIST" ] || [ $(( now - $(mtime "$SLACK_CHANLIST") )) -gt 3600 ]; then
+    out=$("$AC" call "$SLACK_SERVER" slack_list_user_channels \
+      --json '{"types":"public_channel,private_channel,im,mpim","format":"ids_only","exclude_archived":true,"limit":200}' \
+      --text 2>/dev/null </dev/null | grep -oE '^[CDG][A-Z0-9]{8,}$')
+    [ -n "$out" ] && printf '%s\n' "$out" > "$SLACK_CHANLIST"
+  fi
+  if [ ! -s "$SLACK_CHANLIST" ]; then
+    SLACK_ERR="slack channel list failed (claude mcp login $SLACK_SERVER?)"
+    return 0
+  fi
+  for ch in $(cat "$SLACK_CHANLIST"); do
+    out=$("$AC" call "$SLACK_SERVER" slack_read_channel \
+      --json "{\"channel_id\":\"$ch\",\"limit\":30}" --text 2>/dev/null </dev/null)
+    if [ -z "$out" ]; then
+      SLACK_ERR="slack read failed (claude mcp login $SLACK_SERVER?)"
+      continue
+    fi
+    SLACK_SIGS=$(printf '%s' "$SLACK_SIGS" | jq -c --arg k "$ch" \
+      --arg v "$(printf '%s' "$out" | hash16)" '.[$k] = $v')
+  done
+  if [ -f "$SLACK_THREADS" ]; then
+    while read -r ch t; do
+      [ -n "$ch" ] && [ -n "$t" ] || continue
+      out=$("$AC" call "$SLACK_SERVER" slack_read_thread \
+        --json "{\"channel_id\":\"$ch\",\"message_ts\":\"$t\"}" --text 2>/dev/null </dev/null)
+      [ -z "$out" ] && continue
+      SLACK_SIGS=$(printf '%s' "$SLACK_SIGS" | jq -c --arg k "$ch/$t" \
+        --arg v "$(printf '%s' "$out" | hash16)" '.[$k] = $v')
+    done < <(jq -r '.threads[]? | select(.status != "closed") | "\(.channel) \(.ts)"' \
+               "$SLACK_THREADS" 2>/dev/null)
+  fi
+  [ "$PEEK" = 1 ] || jq -nc --argjson at "$now" --argjson sigs "$SLACK_SIGS" \
+    '{at: $at, sigs: $sigs}' > "$SLACK_NOW"
+}
+
 MODE=once
 PEEK=0
 [ "$1" = "--peek" ] && PEEK=1
@@ -172,6 +247,17 @@ save_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$STATE"; }
 save_drafts_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$DSTATE"; }
 save_regate_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$RSTATE"; }
 save_adopt_state() { [ "$PEEK" = 1 ] || printf '%s' "$1" > "$ASTATE"; }
+
+# --slack-ack: the tick has read Slack and acted. Read it again, because the
+# tick's own replies moved the fingerprints, and record that as seen.
+if [ "$1" = "--slack-ack" ]; then
+  [ "$SLACK_ON" = 1 ] || { echo "slack: off (LO_SLACK is not 1)"; exit 0; }
+  slack_read fresh
+  seen=$(cat "$SLACK_SEEN" 2>/dev/null); [ -n "$seen" ] || seen='{}'
+  jq -nc --argjson s "$seen" --argjson n "$SLACK_SIGS" '$s + $n' > "$SLACK_SEEN"
+  echo "slack: acknowledged $(printf '%s' "$SLACK_SIGS" | jq 'length') channel(s) and thread(s)${SLACK_ERR:+; $SLACK_ERR}"
+  exit 0
+fi
 NOREASON=""
 
 # probe: measure the world once. Prints the context block and returns 0 when
@@ -571,6 +657,27 @@ probe() {
   fi
   n_adopt=$(printf '%s' "$adopt" | jq 'length')
 
+  # --- Slack: channels and open threads that moved since the tick's last ack ---
+  # Read at any slot count: a ticket order in a thread needs no agent.
+  slack='[]'
+  if [ "$SLACK_ON" = 1 ]; then
+    if [ -x "$AC" ] || command -v "$AC" >/dev/null 2>&1; then
+      slack_read
+      slack_seen=$(cat "$SLACK_SEEN" 2>/dev/null); [ -n "$slack_seen" ] || slack_seen='{}'
+      slack=$(jq -nc --argjson n "$SLACK_SIGS" --argjson s "$slack_seen" '
+        [ $n | to_entries[] | select($s[.key] != .value)
+          | (.key | split("/")) as $p
+          | if ($p | length) > 1 then {channel: $p[0], thread: $p[1]} else {channel: $p[0]} end ]' \
+        2>/dev/null || echo '[]')
+      [ -n "$SLACK_ERR" ] && notes="$notes${notes:+; }$SLACK_ERR"
+    else
+      notes="$notes${notes:+; }agent-codemode CLI not found; Slack check skipped"
+    fi
+  fi
+  n_slack=$(printf '%s' "$slack" | jq 'length')
+  slacksig=$(printf '%s' "$slack" | hash16)
+  prevslack=$(cat "$SLSTATE" 2>/dev/null)
+
   # --- Linear ready column, but only when a slot could take it ---
   # Cheap pre-filter (assignee tier + not archived); the model still applies the
   # judgment drop-rules and dedups against open PRs. New candidate -> hash change.
@@ -656,6 +763,8 @@ probe() {
   # Feedback needs no slot to act on: a reply, a re-draft and a follow-up ticket
   # are all free. Only the rework behind it needs an agent.
   [ "$n_feedback" -gt 0 ] && work=yes
+  # Slack wakes once per change. The tick clears it with --slack-ack.
+  [ "$n_slack" -gt 0 ] && [ "$slacksig" != "$prevslack" ] && work=yes
   # A draft already surfaced on a prior probe is not work again on its own — only
   # a draft whose verdict actually changed since the state file was last saved.
   # Without the hash check, a draft the model has already looked at and can do
@@ -729,6 +838,7 @@ probe() {
       save_drafts_state "$draftsig"
       save_regate_state "$regatesig"
       save_adopt_state "$adoptsig"
+      [ "$PEEK" = 1 ] || printf '%s' "$slacksig" > "$SLSTATE"
       return 1
     fi
   fi
@@ -737,6 +847,7 @@ probe() {
   save_drafts_state "$draftsig"
   save_regate_state "$regatesig"
   save_adopt_state "$adoptsig"
+  [ "$PEEK" = 1 ] || printf '%s' "$slacksig" > "$SLSTATE"
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots max=$max_agents$capnote"
@@ -744,6 +855,7 @@ probe() {
   [ "$hash" != "$prev" ]    && echo "world-changed: yes"
   [ "$n_regate"  -gt 0 ]    && echo "REGATE: $regate"
   [ "$n_feedback" -gt 0 ]   && echo "FEEDBACK: $feedback"
+  [ "$n_slack" -gt 0 ]      && echo "SLACK: $slack"
   [ "$n_invalid" -gt 0 ]    && echo "INVALID: $invalid"
   [ "$n_drafts"  -gt 0 ]    && echo "DRAFTS: $drafts"
   [ "$n_stack"   -gt 0 ]    && echo "STACK: $stack"
