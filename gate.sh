@@ -183,6 +183,8 @@ SLACK_NOW=~/.claude/linear-orchestrator/gate-slack-now.json        # the last re
 # What the model was last shown, kept apart for the same reason as DSTATE: a
 # thread the tick failed to acknowledge wakes the loop once, not on every probe.
 SLSTATE=~/.claude/linear-orchestrator/gate-slack-state
+# The same for the FEEDBACK line: what the model was last shown.
+FSTATE=~/.claude/linear-orchestrator/gate-feedback-state
 SLACK_ERR=""
 SLACK_SIGS='{}'
 
@@ -766,7 +768,12 @@ probe() {
   [ "$n_invalid" -gt 0 ] && work=yes
   # Feedback needs no slot to act on: a reply, a re-draft and a follow-up ticket
   # are all free. Only the rework behind it needs an agent.
-  [ "$n_feedback" -gt 0 ] && work=yes
+  # Once per change, like REGATE. A comment the tick cannot answer (a hook
+  # denies the post, a ticket write fails) stays on the FEEDBACK line, and the
+  # unconditional form then wakes the waiter on every probe, one tick a minute.
+  fbsig=$(printf '%s' "$feedback" | hash16)
+  prevfb=$(cat "$FSTATE" 2>/dev/null)
+  [ "$n_feedback" -gt 0 ] && [ "$fbsig" != "$prevfb" ] && work=yes
   # Slack wakes once per change. The tick clears it with --slack-ack.
   [ "$n_slack" -gt 0 ] && [ "$slacksig" != "$prevslack" ] && work=yes
   # A draft already surfaced on a prior probe is not work again on its own — only
@@ -843,6 +850,7 @@ probe() {
       save_regate_state "$regatesig"
       save_adopt_state "$adoptsig"
       [ "$PEEK" = 1 ] || printf '%s' "$slacksig" > "$SLSTATE"
+      [ "$PEEK" = 1 ] || printf '%s' "$fbsig" > "$FSTATE"
       return 1
     fi
   fi
@@ -852,6 +860,7 @@ probe() {
   save_regate_state "$regatesig"
   save_adopt_state "$adoptsig"
   [ "$PEEK" = 1 ] || printf '%s' "$slacksig" > "$SLSTATE"
+  [ "$PEEK" = 1 ] || printf '%s' "$fbsig" > "$FSTATE"
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots max=$max_agents$capnote"
