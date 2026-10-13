@@ -122,7 +122,9 @@ async function main() {
 
   const links = [];
   for (const file of files) {
-    const before = await evaluate(`${BOX}.value`);
+    const LINK = /https:\/\/github\.com\/user-attachments\/assets\/[0-9a-f-]+/g;
+    const known = (await evaluate(`${BOX}.value`)).match(LINK) || [];
+    let last = "";
     const { root } = await send("DOM.getDocument", { depth: 0 });
     // The file input that belongs to the comment box: the one inside its form.
     const marked = await evaluate(`(() => {
@@ -135,17 +137,27 @@ async function main() {
     })()`);
     if (!marked) finish(1, "no file input next to the comment box");
     const { nodeId } = await send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[data-gh-attach]" });
-    await send("DOM.setFileInputFiles", { nodeId, files: [path.resolve(file)] });
+    // Chrome refuses some source directories ("We don't support that file
+    // type" for a valid PNG under the home directory), so hand it a copy that
+    // sits beside its own profile.
+    const staged = path.join(profile, `upload-${links.length}-${path.basename(file)}`);
+    fs.copyFileSync(file, staged);
+    await send("DOM.setFileInputFiles", { nodeId, files: [staged] });
 
     let link = null;
     for (let i = 0; i < 120 && !link; i++) {
       await sleep(500);
-      const value = await evaluate(`${BOX}.value`);
-      const added = value.slice(before.length);
-      const m = added.match(/https:\/\/github\.com\/user-attachments\/assets\/[0-9a-f-]+/);
-      if (m) link = m[0];
+      last = await evaluate(`${BOX}.value`);
+      // The link can land anywhere in the box, so look for one that was not there before.
+      const found = last.match(LINK) || [];
+      link = found.find((l) => !known.includes(l)) || null;
     }
-    if (!link) finish(1, `the upload of ${file} gave no link`);
+    if (!link) {
+      const errors = await evaluate(
+        `[...document.querySelectorAll('.flash-error, [role=alert], file-attachment .error')].map(e => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 300)`,
+      ).catch(() => "");
+      finish(1, `the upload of ${file} gave no link. Comment box holds: ${JSON.stringify(last.slice(0, 200))}. Page says: ${errors || "nothing"}`);
+    }
     links.push(link);
     await evaluate(`document.querySelector('input[data-gh-attach]')?.removeAttribute('data-gh-attach')`);
   }
