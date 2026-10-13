@@ -270,9 +270,20 @@ belongs to a person. Never read or post through it.
   agent holds it, in `slot`), `answered`, or `closed`. Close a thread after 14
   days without a reply. The gate watches every thread that is not `closed`.
 
-For each entry on the `SLACK` line, read the channel from its `channels` value
-(`slack_read_channel` with `oldest`), or the thread (`slack_read_thread`). Then,
-per message that is new:
+For each entry on the `SLACK` line that names a thread, read that thread
+(`slack_read_thread`). For each entry that names a channel, **read its last 30
+messages without `oldest`**. A new message is one of two things:
+
+- a top-level message whose `Message TS` is newer than the channel's `channels`
+  value, or than `since` when the channel has none;
+- **a reply in any thread**, the loop's or not. A reply does not show in the
+  channel read. Its parent shows it instead, as `Thread: N replies (latest:
+  <time>)`. Read every thread whose `latest` time is newer than the channel's
+  `channels` value, and take the replies newer than that value. A read with
+  `oldest` hides the parent, so it never finds these.
+
+After the channel is handled, set its `channels` value to the newest `ts` seen,
+top-level or reply. Then, per message that is new:
 
 1. **Skip** what the loop wrote (it ends with `🌙 lo:<OWNER>`), bot messages and
    join notices.
