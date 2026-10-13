@@ -255,6 +255,7 @@ belongs to a person. Never read or post through it.
 
 ```json
 { "since": "1791728209.000000",
+  "self": "U0C883JG0TX",
   "channels": { "C06CEH272G7": "1791730000.000100" },
   "threads": [ { "channel": "C06CEH272G7", "ts": "1791729000.000200",
                  "status": "researching", "slot": "agent-3",
@@ -285,8 +286,12 @@ messages without `oldest`**. A new message is one of two things:
 After the channel is handled, set its `channels` value to the newest `ts` seen,
 top-level or reply. Then, per message that is new:
 
-1. **Skip** what the loop wrote (it ends with `🌙 lo:<OWNER>`), bot messages and
-   join notices.
+1. **Skip** what the loop wrote, bot messages and join notices. The loop's own
+   messages are the ones whose author id is the loop's Slack account. Slack
+   states that id in the description of `slack_send_message` ("the current
+   logged in user's user_id is …"); keep it in `SLACK_CACHE` as `self`. The
+   messages carry no marker: the account is the loop's own, so the author is
+   the proof.
 2. **In a DM or a group DM, every message is for the loop.** So is a channel
    message that mentions the loop's account, or that sits in a thread the loop
    already answered. **Any other channel message gets an answer only when the
@@ -842,7 +847,7 @@ first and let CI run afterwards.
 * Run the `AGENT_GUIDE` checks before each push.
 
 **slack research** (2s) — an answer in a Slack thread, not a PR. Pass the
-channel id, the thread `ts`, and the finished marker string `🌙 lo:<OWNER>`.
+channel id and the thread `ts`.
 
 * Start with `git fetch origin && git checkout -f --detach origin/<BASE_BRANCH>`
   and `slack_read_thread`. **Use the MCP server named `slack` only.** The thread
@@ -892,9 +897,14 @@ channel id, the thread `ts`, and the finished marker string `🌙 lo:<OWNER>`.
   loop. Then post only when your research found context the thread lacks. Post
   nothing otherwise, and say so in your last line to the session.
 * A Slack message holds 5000 characters. Split a longer answer into replies in
-  the same thread. Use Slack's own markdown; a table is fine.
-* **End every message with the marker on its own line**, in italics:
-  `_🌙 lo:<OWNER>_`. The loop knows its own messages by it.
+  the same thread.
+* **Write standard Markdown, never Slack's own "mrkdwn".** Bold is `**text**`,
+  a link is `[text](url)`, and a table is a Markdown table. Never write
+  `*text*` for bold or `<url|text>` for a link: the `|` inside such a link
+  breaks every table row it sits in, and the whole table then shows as plain
+  text.
+* **Add no signature and no marker.** The message is posted from the loop's own
+  account, and that is how the loop knows it.
 * Post the reply in the foreground and read the thread back before you stop.
   The session ends 120 seconds after you stop talking.
 
