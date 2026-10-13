@@ -756,9 +756,13 @@ it already has overrides what it correctly knew.
 >
 > **Screenshots are not a section of their own** — the before shot goes in
 > **Problem**, the after shot in **Solution**, each beside the sentence it proves.
-> Drive the real screen in the browser, and **upload through the GitHub web UI**:
-> open the PR on github.com, edit the body, drop the file in. Never `git add` an
-> image.
+> Drive the real screen in the browser. **Upload with
+> `~/.claude/skills/linear-orchestrator/gh-attach <owner/repo> <PR#> <file>...`**:
+> it prints one `user-attachments` link per file and posts nothing; put the
+> links in the body. It reuses the GitHub login of the desktop Chrome on the
+> machine, so that Chrome must be signed in once. Without `gh-attach`, upload
+> through the GitHub web UI: open the PR, edit the body, drop the file in. Never
+> `git add` an image.
 >
 > Do not run `npm install` — `node_modules` is a symlink to the real checkout.
 >
@@ -998,8 +1002,8 @@ channel id and the thread `ts`.
 **needs-screenshot** — the narrowest: check out the branch, start a dev server,
 drive the changed screen, capture before and after, edit them into **Problem**
 and **Solution**, **change no code**. A bug found on the way goes in a `note` entry,
-not the diff. **Upload through the GitHub web UI, never `git add` an image** —
-the diff must not grow by a single file.
+not the diff. **Upload with `gh-attach` (or through the GitHub web UI), never
+`git add` an image** — the diff must not grow by a single file.
 
 ### Why one log comment, and one fix pass
 

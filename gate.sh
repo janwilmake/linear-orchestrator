@@ -827,8 +827,14 @@ probe() {
   # became promotable would sit unnoticed until the next unrelated change.
   draftsig=$(printf '%s' "$verdicts" | jq -Sc --argjson d "$drafts" \
       '[ .[] | select(.pr as $p | $d | index($p)) | {pr,draft,merge,ci,base} ]' \
-      2>/dev/null | hash16)
+      2>/dev/null)
   prevdrafts=$(cat "$DSTATE" 2>/dev/null)
+  # A draft is news when it is new on the list or its verdict moved. A list that
+  # only got shorter is not: the tick just dispatched one, and waking for that
+  # costs a tick with nothing to do after every single dispatch.
+  drafts_news=$(jq -nc --argjson n "${draftsig:-[]}" --arg p "$prevdrafts" \
+    '($p | try fromjson catch []) as $prev | [ $n[] | select(. as $e | $prev | index($e) | not) ] | length' \
+    2>/dev/null || echo 1)
 
   # The same fingerprint for the de-gate list, over the fields a REGATE entry is
   # judged on. A PR that goes red or starts conflicting still wakes the model at
@@ -866,7 +872,7 @@ probe() {
   # full forge-reading probe back to back. Seen for real on HYR2-1339's stack:
   # a held draft woke the waiter roughly every 28s (the probe's own runtime)
   # for as long as it sat there.
-  [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && [ "$draftsig" != "$prevdrafts" ] && work=yes
+  [ "$slots" -gt 0 ] && [ "$n_drafts" -gt 0 ] && [ "${drafts_news:-1}" -gt 0 ] && work=yes
   # An adopted PR is agent work, so it waits for a slot like a draft does.
   [ "$slots" -gt 0 ] && [ "$n_adopt" -gt 0 ] && [ "$adoptsig" != "$prevadopt" ] && work=yes
   # A stale queue is only work when Linear has something to rebuild it FROM.

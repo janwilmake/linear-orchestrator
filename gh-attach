@@ -1,0 +1,161 @@
+#!/usr/bin/env node
+// gh-attach: upload an image to GitHub's attachment host and print its link.
+//
+//   gh-attach <owner/repo> <PR number> <image file> [more image files...]
+//
+// Prints one `https://github.com/user-attachments/assets/…` link per file, in
+// order. Put the links in the PR body yourself (`gh pr edit --body-file`).
+//
+// How: GitHub has no API for this host. A file dropped in a PR comment box is
+// uploaded at once and the box receives its link, before anything is posted.
+// This script does that in a headless Chrome and never submits the comment.
+//
+// It needs a Chrome profile that is signed in to GitHub. It copies the cookies
+// of the desktop Chrome on this machine (GH_ATTACH_PROFILE, default
+// ~/.config/google-chrome) into a temp profile, so the desktop Chrome is not
+// touched and need not be closed. No dependencies: Node 22+ and google-chrome.
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const [repo, pr, ...files] = process.argv.slice(2);
+if (!repo || !pr || files.length === 0) {
+  console.error("usage: gh-attach <owner/repo> <PR number> <image file>...");
+  process.exit(2);
+}
+for (const f of files) {
+  if (!fs.existsSync(f)) {
+    console.error(`gh-attach: no such file: ${f}`);
+    process.exit(2);
+  }
+}
+
+const source = process.env.GH_ATTACH_PROFILE || path.join(os.homedir(), ".config/google-chrome");
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), "gh-attach-"));
+fs.mkdirSync(path.join(profile, "Default"), { recursive: true });
+for (const rel of ["Local State", "Default/Cookies", "Default/Preferences"]) {
+  const from = path.join(source, rel);
+  if (fs.existsSync(from)) fs.copyFileSync(from, path.join(profile, rel));
+}
+
+const port = 9300 + Math.floor(Math.random() * 500);
+const chrome = spawn(
+  process.env.GH_ATTACH_CHROME || "google-chrome",
+  [
+    "--headless=new",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${profile}`,
+    // The desktop Chrome runs with this flag, so its cookies decrypt only with it.
+    "--password-store=basic",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--window-size=1400,1000",
+    "about:blank",
+  ],
+  { stdio: "ignore" },
+);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function finish(code, message) {
+  if (message) console.error(`gh-attach: ${message}`);
+  try {
+    chrome.kill("SIGKILL");
+  } catch {}
+  try {
+    fs.rmSync(profile, { recursive: true, force: true });
+  } catch {}
+  process.exit(code);
+}
+setTimeout(() => finish(1, "timed out after 120 s"), 120_000).unref();
+
+async function main() {
+  let target;
+  for (let i = 0; i < 50 && !target; i++) {
+    await sleep(200);
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      target = list.find((t) => t.type === "page");
+    } catch {}
+  }
+  if (!target) finish(1, "Chrome did not start");
+
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((res, rej) => {
+    ws.onopen = res;
+    ws.onerror = () => rej(new Error("cannot reach Chrome"));
+  });
+  let seq = 0;
+  const waiting = new Map();
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.id && waiting.has(msg.id)) {
+      const { res, rej } = waiting.get(msg.id);
+      waiting.delete(msg.id);
+      msg.error ? rej(new Error(msg.error.message)) : res(msg.result);
+    }
+  };
+  const send = (method, params = {}) =>
+    new Promise((res, rej) => {
+      const id = ++seq;
+      waiting.set(id, { res, rej });
+      ws.send(JSON.stringify({ id, method, params }));
+    });
+  const evaluate = async (expression) =>
+    (await send("Runtime.evaluate", { expression, returnByValue: true })).result.value;
+
+  await send("Page.enable");
+  await send("DOM.enable");
+  await send("Page.navigate", { url: `https://github.com/${repo}/pull/${pr}` });
+
+  // The comment box is the last thing on the page to become ready.
+  const BOX = `(document.querySelector('textarea#new_comment_field') || document.querySelector('textarea[name="comment[body]"]'))`;
+  let ready = false;
+  for (let i = 0; i < 60 && !ready; i++) {
+    await sleep(500);
+    ready = await evaluate(`!!${BOX}`).catch(() => false);
+  }
+  if (!ready) {
+    const where = await evaluate("location.href").catch(() => "?");
+    finish(1, `no comment box on the PR page (at ${where}). Is the Chrome profile signed in to GitHub, with access to ${repo}?`);
+  }
+
+  const links = [];
+  for (const file of files) {
+    const before = await evaluate(`${BOX}.value`);
+    const { root } = await send("DOM.getDocument", { depth: 0 });
+    // The file input that belongs to the comment box: the one inside its form.
+    const marked = await evaluate(`(() => {
+      const box = ${BOX};
+      const scope = box.closest('form') || box.closest('file-attachment') || document;
+      const input = scope.querySelector('input[type=file]') || document.querySelector('input[type=file]');
+      if (!input) return false;
+      input.setAttribute('data-gh-attach', '1');
+      return true;
+    })()`);
+    if (!marked) finish(1, "no file input next to the comment box");
+    const { nodeId } = await send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[data-gh-attach]" });
+    await send("DOM.setFileInputFiles", { nodeId, files: [path.resolve(file)] });
+
+    let link = null;
+    for (let i = 0; i < 120 && !link; i++) {
+      await sleep(500);
+      const value = await evaluate(`${BOX}.value`);
+      const added = value.slice(before.length);
+      const m = added.match(/https:\/\/github\.com\/user-attachments\/assets\/[0-9a-f-]+/);
+      if (m) link = m[0];
+    }
+    if (!link) finish(1, `the upload of ${file} gave no link`);
+    links.push(link);
+    await evaluate(`document.querySelector('input[data-gh-attach]')?.removeAttribute('data-gh-attach')`);
+  }
+
+  // Leave nothing behind: the comment is never submitted, and the draft text
+  // GitHub keeps for the box is cleared.
+  await evaluate(`(() => { const b = ${BOX}; b.value = ''; b.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  for (const link of links) console.log(link);
+  ws.close();
+  finish(0);
+}
+
+main().catch((err) => finish(1, err.message));
