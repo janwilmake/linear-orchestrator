@@ -201,9 +201,11 @@ slack_read() {
     fi
   fi
   if [ ! -s "$SLACK_CHANLIST" ] || [ $(( now - $(mtime "$SLACK_CHANLIST") )) -gt 3600 ]; then
+    # The text content is one JSON string, so its line breaks arrive as a
+    # literal backslash-n. Turn them into lines before picking out the ids.
     out=$("$AC" call "$SLACK_SERVER" slack_list_user_channels \
       --json '{"types":"public_channel,private_channel,im,mpim","format":"ids_only","exclude_archived":true,"limit":200}' \
-      --text 2>/dev/null </dev/null | grep -oE '^[CDG][A-Z0-9]{8,}$')
+      --text 2>/dev/null </dev/null | sed 's/\\n/\n/g' | grep -oE '^[CDG][A-Z0-9]{8,}' | sort -u)
     [ -n "$out" ] && printf '%s\n' "$out" > "$SLACK_CHANLIST"
   fi
   if [ ! -s "$SLACK_CHANLIST" ]; then
