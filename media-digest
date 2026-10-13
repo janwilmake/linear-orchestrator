@@ -1,0 +1,143 @@
+#!/bin/bash
+# media-digest: turn a video or a voice recording into something a model can read.
+#
+#   media-digest <file-or-url> [out-dir]
+#
+# Writes into out-dir (default: a new temp directory) and prints the paths:
+#   sheet.png        up to 20 frames next to each other, each with its time
+#   frames/NN.png    the same frames at full size, for reading small text
+#   transcript.txt   the speech with timestamps, language detected by itself
+#   info.txt         duration, language, source
+#
+# A URL (Loom, YouTube, a direct file link) is downloaded with yt-dlp first.
+# `slack:<file id>` reads a file attached to a Slack message.
+# An audio file gets a transcript and no sheet. An image needs none of this:
+# read it directly.
+#
+# Needs ffmpeg, ffprobe and yt-dlp on PATH or in ~/.local/bin, ImageMagick's
+# `montage`, and faster-whisper in ~/.local/share/media-digest/venv.
+set -u
+export PATH="$HOME/.local/bin:$PATH"
+MAX_FRAMES="${MEDIA_DIGEST_FRAMES:-20}"
+MODEL="${MEDIA_DIGEST_MODEL:-small}"
+PY="$HOME/.local/share/media-digest/venv/bin/python"
+
+src="${1:-}"
+[ -n "$src" ] || { echo "usage: media-digest <file | url | slack:FILEID> [out-dir]" >&2; exit 2; }
+out="${2:-$(mktemp -d "${TMPDIR:-/tmp}/media-digest.XXXXXX")}"
+mkdir -p "$out/frames"
+
+case "$src" in
+  http://*|https://*)
+    yt-dlp -q --no-playlist -f "bv*[height<=1080]+ba/b[height<=1080]/b" \
+      --merge-output-format mp4 -o "$out/source.%(ext)s" "$src" \
+      || { echo "media-digest: download failed (a private Loom needs a login)" >&2; exit 1; }
+    file=$(ls "$out"/source.* 2>/dev/null | head -1)
+    ;;
+  slack:*)
+    # A file attached to a Slack message, by its file id (F…). Slack hands it
+    # over as base64 inside the tool answer, up to 10 MB.
+    fid="${src#slack:}"
+    agent-codemode call "${LO_SLACK_SERVER:-slack}" slack_read_file --json "{\"file_id\":\"$fid\"}" --raw \
+      2>/dev/null > "$out/slack.json"
+    ext=$(jq -r '.content[]? | select(.type=="resource") | .resource.mimeType' "$out/slack.json" 2>/dev/null | head -1 | cut -d/ -f2)
+    jq -r '.content[]? | select(.type=="resource") | .resource.blob' "$out/slack.json" 2>/dev/null \
+      | base64 -d > "$out/source.${ext:-bin}" 2>/dev/null
+    rm -f "$out/slack.json"
+    file="$out/source.${ext:-bin}"
+    [ -s "$file" ] || { echo "media-digest: could not read Slack file $fid (over 10 MB, or no access)" >&2; exit 1; }
+    ;;
+  *) file="$src" ;;
+esac
+[ -f "$file" ] || { echo "media-digest: no such file: $file" >&2; exit 1; }
+
+dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null | cut -d. -f1)
+dur="${dur:-0}"
+has_video=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "$file" 2>/dev/null | head -1)
+has_audio=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_type -of csv=p=0 "$file" 2>/dev/null | head -1)
+
+stamp() { printf '%02d:%02d' $(( $1 / 60 )) $(( $1 % 60 )); }
+
+# --- frames: the moments the picture changed, evenly filled up when few changed ---
+if [ -n "$has_video" ] && [ "$dur" -gt 0 ]; then
+  times=$(ffmpeg -hide_banner -nostdin -i "$file" -an \
+      -vf "select='gt(scene,0.08)',metadata=print:file=-" -f null - 2>/dev/null \
+    | sed -n 's/.*pts_time:\([0-9.]*\).*/\1/p' | cut -d. -f1 | sort -un)
+  n=$(printf '%s\n' "$times" | grep -c .)
+  if [ "$n" -gt "$MAX_FRAMES" ]; then
+    # too many changes: keep an even spread of them
+    times=$(printf '%s\n' "$times" | awk -v n="$n" -v m="$MAX_FRAMES" \
+      'BEGIN{step=n/m} {a[NR]=$0} END{for(i=0;i<m;i++) print a[int(i*step)+1]}')
+  elif [ "$n" -lt "$MAX_FRAMES" ]; then
+    # few changes: add evenly spaced moments, so a still screen is covered too
+    extra=$(awk -v d="$dur" -v m="$MAX_FRAMES" 'BEGIN{for(i=0;i<m;i++) print int(i*d/m)}')
+    times=$(printf '%s\n%s\n' "$times" "$extra" | grep . | sort -un | head -n 60 \
+      | awk -v m="$MAX_FRAMES" '{a[NR]=$0} END{if(NR<=m){for(i=1;i<=NR;i++)print a[i]}else{s=NR/m;for(i=0;i<m;i++)print a[int(i*s)+1]}}')
+  fi
+  i=0
+  for t in $times; do
+    i=$(( i + 1 )); f=$(printf '%s/frames/%02d.png' "$out" "$i")
+    ffmpeg -hide_banner -nostdin -loglevel error -ss "$t" -i "$file" -frames:v 1 -y "$f" 2>/dev/null
+    [ -s "$f" ] && printf '%s\t%s\n' "$f" "$(stamp "$t")" >> "$out/frames.tsv"
+  done
+  if [ -s "$out/frames.tsv" ]; then
+    args=()
+    while IFS=$'\t' read -r f lab; do args+=( -label "$(basename "$f" .png)  $lab" "$f" ); done < "$out/frames.tsv"
+    # A phone video is upright: use narrow cells, or most of the sheet is padding.
+    dims=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height:stream_side_data=rotation \
+      -of csv=p=0:s=x "$file" 2>/dev/null | head -1)
+    w=$(printf '%s' "$dims" | cut -dx -f1); h=$(printf '%s' "$dims" | cut -dx -f2)
+    first=$(head -1 "$out/frames.tsv" | cut -f1)
+    fd=$(identify -format '%wx%h' "$first" 2>/dev/null); w="${fd%x*}"; h="${fd#*x}"
+    if [ "${h:-0}" -gt "${w:-1}" ]; then tile=7x; geo=440x780+6+6; else tile=5x; geo=640x400+6+6; fi
+    montage "${args[@]}" -tile "$tile" -geometry "$geo" -background '#111' -fill white \
+      -pointsize 20 "$out/sheet.png" 2>/dev/null
+  fi
+fi
+
+# --- transcript: language detected from the sound ---
+lang="none"
+if [ -n "$has_audio" ]; then
+  ffmpeg -hide_banner -nostdin -loglevel error -i "$file" -vn -ac 1 -ar 16000 -y "$out/audio.wav" 2>/dev/null
+  if [ -s "$out/audio.wav" ]; then
+    lang=$("$PY" - "$out/audio.wav" "$out/transcript.txt" "$MODEL" <<'PYEOF' 2>"$out/transcribe.err"
+import sys, wave
+import numpy as np
+from faster_whisper import WhisperModel
+wav, dst, name = sys.argv[1:4]
+# Read the samples here and hand over an array: the library's own file reader
+# breaks on newer PyAV versions. ffmpeg already made it 16 kHz mono.
+with wave.open(wav) as w:
+    audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+model = WhisperModel(name, device="cpu", compute_type="int8")
+segments, info = model.transcribe(audio, vad_filter=True)
+with open(dst, "w") as fh:
+    for s in segments:
+        m, sec = divmod(int(s.start), 60)
+        fh.write(f"[{m:02d}:{sec:02d}] {s.text.strip()}\n")
+print(f"{info.language} ({info.language_probability:.2f})")
+PYEOF
+)
+    rm -f "$out/audio.wav"
+    if [ -z "$lang" ]; then
+      echo "media-digest: transcription failed: $(tail -1 "$out/transcribe.err")" >&2
+      lang="unknown (transcription failed)"
+    else
+      rm -f "$out/transcribe.err"
+    fi
+    [ -s "$out/transcript.txt" ] || { rm -f "$out/transcript.txt"; lang="${lang:-none} (no speech found)"; }
+  fi
+fi
+
+{
+  echo "source: $src"
+  echo "duration: $(stamp "$dur")"
+  echo "language: ${lang:-unknown}"
+  echo "frames: $( [ -f "$out/frames.tsv" ] && wc -l < "$out/frames.tsv" || echo 0 )"
+} > "$out/info.txt"
+
+cat "$out/info.txt"
+[ -s "$out/sheet.png" ] && echo "sheet: $out/sheet.png"
+[ -s "$out/transcript.txt" ] && echo "transcript: $out/transcript.txt"
+[ -f "$out/frames.tsv" ] && echo "frames: $out/frames/"
+exit 0

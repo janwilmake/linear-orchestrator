@@ -762,6 +762,16 @@ it already has overrides what it correctly knew.
 >
 > Do not run `npm install` — `node_modules` is a symlink to the real checkout.
 >
+> **Look at every image, video and voice recording** that the ticket, the PR or
+> the thread carries; never answer around one. Read an image directly. For a
+> video, a voice note or a Loom link, run
+> `~/.claude/skills/linear-orchestrator/media-digest <file | url | slack:FILEID>`:
+> it writes one sheet of up to 20 frames with their times, the same frames at
+> full size, and a transcript with timestamps in the language that is spoken.
+> Read the sheet and the transcript together, and open a single frame when the
+> text on the sheet is too small. Say in one line when a file could not be read
+> (a private Loom, a file over 10 MB).
+>
 > **Never leave a background process behind.** A load generator, a watcher or a
 > dev server you start must die before you stop. `jobs -p` is empty in a
 > non-interactive shell, so a cleanup built on it kills nothing: keep each pid as
@@ -924,6 +934,15 @@ channel id and the thread `ts`.
 * **Change nothing.** No commit, no branch, no PR, no Linear write, no write to
   any system. Reading is free: the code, `git log`, the docs, Linear, open and
   merged PRs, logs, staging.
+* **Look at every image, video and voice recording** that the ticket, the PR or
+  the thread carries; never answer around one. Read an image directly. For a
+  video, a voice note or a Loom link, run
+  `~/.claude/skills/linear-orchestrator/media-digest <file | url | slack:FILEID>`:
+  it writes one sheet of up to 20 frames with their times, the same frames at
+  full size, and a transcript with timestamps in the language that is spoken.
+  Read the sheet and the transcript together, and open a single frame when the
+  text on the sheet is too small. Say in one line when a file could not be read
+  (a private Loom, a file over 10 MB).
 * **Spend real effort.** Read the code that answers the question, not only its
   docs. Run it where that settles a doubt. Say what you verified and what you
   only read.
