@@ -67,7 +67,7 @@ function finish(code, message) {
   } catch {}
   process.exit(code);
 }
-setTimeout(() => finish(1, "timed out after 120 s"), 120_000).unref();
+setTimeout(() => finish(1, "timed out after 300 s"), 300_000).unref();
 
 async function main() {
   let target;
@@ -115,6 +115,19 @@ async function main() {
     await sleep(500);
     ready = await evaluate(`!!${BOX}`).catch(() => false);
   }
+  // The box exists before GitHub's scripts listen to its file input. A file set
+  // in that gap is ignored without any error, so wait for the page to settle.
+  const settle = async () => {
+    for (let i = 0; i < 40; i++) {
+      const done = await evaluate(
+        `document.readyState === 'complete' && !!customElements.get('file-attachment')`,
+      ).catch(() => false);
+      if (done) break;
+      await sleep(250);
+    }
+    await sleep(1500);
+  };
+  if (ready) await settle();
   if (!ready) {
     const where = await evaluate("location.href").catch(() => "?");
     finish(1, `no comment box on the PR page (at ${where}). Is the Chrome profile signed in to GitHub, with access to ${repo}?`);
@@ -137,26 +150,32 @@ async function main() {
     })()`);
     if (!marked) finish(1, "no file input next to the comment box");
     const { nodeId } = await send("DOM.querySelector", { nodeId: root.nodeId, selector: "input[data-gh-attach]" });
-    // Chrome refuses some source directories ("We don't support that file
-    // type" for a valid PNG under the home directory), so hand it a copy that
-    // sits beside its own profile.
+    // Hand Chrome a copy that sits beside its own profile, so the source
+    // directory and its permissions never matter.
     const staged = path.join(profile, `upload-${links.length}-${path.basename(file)}`);
     fs.copyFileSync(file, staged);
     await send("DOM.setFileInputFiles", { nodeId, files: [staged] });
 
     let link = null;
-    for (let i = 0; i < 120 && !link; i++) {
-      await sleep(500);
-      last = await evaluate(`${BOX}.value`);
-      // The link can land anywhere in the box, so look for one that was not there before.
-      const found = last.match(LINK) || [];
-      link = found.find((l) => !known.includes(l)) || null;
+    for (let attempt = 1; attempt <= 4 && !link; attempt++) {
+      if (attempt > 1) {
+        // Nothing came: the page ignored the file. Give it the file again.
+        await evaluate(`(() => { const i = document.querySelector('input[data-gh-attach]'); if (i) i.value = ''; })()`);
+        await sleep(2000);
+        await send("DOM.setFileInputFiles", { nodeId, files: [staged] });
+      }
+      for (let i = 0; i < 40 && !link; i++) {
+        await sleep(500);
+        last = await evaluate(`${BOX}.value`);
+        // The link can land anywhere in the box, so look for one that was not there before.
+        const found = last.match(LINK) || [];
+        link = found.find((l) => !known.includes(l)) || null;
+        // "Uploading…" in the box means the upload runs: keep waiting, do not send it twice.
+        if (!link && /Uploading/.test(last)) i = Math.min(i, 20);
+      }
     }
     if (!link) {
-      const errors = await evaluate(
-        `[...document.querySelectorAll('.flash-error, [role=alert], file-attachment .error')].map(e => e.innerText.trim()).filter(Boolean).join(' | ').slice(0, 300)`,
-      ).catch(() => "");
-      finish(1, `the upload of ${file} gave no link. Comment box holds: ${JSON.stringify(last.slice(0, 200))}. Page says: ${errors || "nothing"}`);
+      finish(1, `the upload of ${file} gave no link after 4 tries. Comment box holds: ${JSON.stringify(last.slice(0, 200))}`);
     }
     links.push(link);
     await evaluate(`document.querySelector('input[data-gh-attach]')?.removeAttribute('data-gh-attach')`);
