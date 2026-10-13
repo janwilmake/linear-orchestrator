@@ -377,8 +377,11 @@ their own mailbox, or a draft message in Slack. The rules:
   message), and create the draft only when it is the email of the person who
   asked. Otherwise say whose mailbox the loop can reach, and create nothing.
 - **Create it, never send it.** No send, no schedule, no reply posted.
-- **Leave the recipients to the person** unless they named them. Put no address
-  in the To line that the loop found by itself in customer data.
+- **Fill the recipients when the request makes clear who they are**: the people
+  the thread is about, or the people the asker names. Say in the reply which
+  addresses went into the To and Cc lines and where the loop found them, so the
+  person can check them before sending. When it is not clear who they are,
+  leave the To line empty and ask.
 - Reply in the thread with the link to the draft, and with anything in the text
   that is not verified.
 
