@@ -183,6 +183,10 @@ SLACK_NOW=~/.claude/linear-orchestrator/gate-slack-now.json        # the last re
 # What the model was last shown, kept apart for the same reason as DSTATE: a
 # thread the tick failed to acknowledge wakes the loop once, not on every probe.
 SLSTATE=~/.claude/linear-orchestrator/gate-slack-state
+# The keys of the last SLACK line the model was shown. An ack covers these keys
+# only: a channel that moved while the tick worked on another one was never
+# read, and acknowledging it would hide a person's message for good.
+SLACK_SHOWN=~/.claude/linear-orchestrator/gate-slack-shown.json
 # The same for the FEEDBACK line: what the model was last shown.
 FSTATE=~/.claude/linear-orchestrator/gate-feedback-state
 SLACK_ERR=""
@@ -261,6 +265,7 @@ INBOX_INTERVAL="${LO_INBOX_INTERVAL:-120}"   # seconds between real reads
 INBOX_SEEN=~/.claude/linear-orchestrator/gate-inbox-seen.json
 INBOX_NOW=~/.claude/linear-orchestrator/gate-inbox-now.json
 ISTATE=~/.claude/linear-orchestrator/gate-inbox-state
+INBOX_SHOWN=~/.claude/linear-orchestrator/gate-inbox-shown.json   # the kinds of the last INBOX line shown
 INBOX_ERR=""
 INBOX_SIGS='{}'
 
@@ -323,8 +328,21 @@ if [ "$1" = "--slack-ack" ]; then
   [ "$SLACK_ON" = 1 ] || { echo "slack: off (LO_SLACK is not 1)"; exit 0; }
   slack_read fresh
   seen=$(cat "$SLACK_SEEN" 2>/dev/null); [ -n "$seen" ] || seen='{}'
-  jq -nc --argjson s "$seen" --argjson n "$SLACK_SIGS" '$s + $n' > "$SLACK_SEEN"
-  echo "slack: acknowledged $(printf '%s' "$SLACK_SIGS" | jq 'length') channel(s) and thread(s)${SLACK_ERR:+; $SLACK_ERR}"
+  shift
+  if [ "$1" = all ]; then
+    # The baseline, on the day the watch is switched on: everything is seen.
+    keys=$(printf '%s' "$SLACK_SIGS" | jq -c 'keys')
+  else
+    # What the last SLACK line showed, plus any key named here (a thread the
+    # tick just opened, as "<channel>/<ts>").
+    shown=$(cat "$SLACK_SHOWN" 2>/dev/null); [ -n "$shown" ] || shown='[]'
+    keys=$(jq -nc --argjson a "$shown" '$a + $ARGS.positional' --args "$@")
+  fi
+  jq -nc --argjson s "$seen" --argjson n "$SLACK_SIGS" --argjson k "$keys" \
+    '$s + ($n | with_entries(select(.key as $x | $k | index($x))))' > "$SLACK_SEEN"
+  echo '[]' > "$SLACK_SHOWN"
+  left=$(jq -nc --argjson n "$SLACK_SIGS" --slurpfile s "$SLACK_SEEN" '[ $n | to_entries[] | select($s[0][.key] != .value) | .key ] | length')
+  echo "slack: acknowledged $(printf '%s' "$keys" | jq 'length') key(s); $left still unread${SLACK_ERR:+; $SLACK_ERR}"
   exit 0
 fi
 
@@ -333,8 +351,15 @@ if [ "$1" = "--inbox-ack" ]; then
   [ -n "$INBOX_EMAIL" ] || { echo "inbox: off (LO_INBOX_EMAIL is empty)"; exit 0; }
   inbox_read fresh
   seen=$(cat "$INBOX_SEEN" 2>/dev/null); [ -n "$seen" ] || seen='{}'
-  jq -nc --argjson s "$seen" --argjson n "$INBOX_SIGS" '$s + $n' > "$INBOX_SEEN"
-  echo "inbox: acknowledged $(printf '%s' "$INBOX_SIGS" | jq -c 'keys')${INBOX_ERR:+; $INBOX_ERR}"
+  if [ "$2" = all ]; then
+    keys=$(printf '%s' "$INBOX_SIGS" | jq -c 'keys')
+  else
+    keys=$(cat "$INBOX_SHOWN" 2>/dev/null); [ -n "$keys" ] || keys='[]'
+  fi
+  jq -nc --argjson s "$seen" --argjson n "$INBOX_SIGS" --argjson k "$keys" \
+    '$s + ($n | with_entries(select(.key as $x | $k | index($x))))' > "$INBOX_SEEN"
+  echo '[]' > "$INBOX_SHOWN"
+  echo "inbox: acknowledged $keys${INBOX_ERR:+; $INBOX_ERR}"
   exit 0
 fi
 NOREASON=""
@@ -966,7 +991,11 @@ probe() {
   [ "$n_regate"  -gt 0 ]    && echo "REGATE: $regate"
   [ "$n_feedback" -gt 0 ]   && echo "FEEDBACK: $feedback"
   [ "$n_slack" -gt 0 ]      && echo "SLACK: $slack"
+  if [ "$n_slack" -gt 0 ] && [ "$PEEK" != 1 ]; then
+    printf '%s' "$slack" | jq -c '[ .[] | if .thread then "\(.channel)/\(.thread)" else .channel end ]' > "$SLACK_SHOWN"
+  fi
   [ "$n_inbox" -gt 0 ]      && echo "INBOX: $inbox"
+  [ "$n_inbox" -gt 0 ] && [ "$PEEK" != 1 ] && printf '%s' "$inbox" > "$INBOX_SHOWN"
   [ "$n_invalid" -gt 0 ]    && echo "INVALID: $invalid"
   [ "$n_drafts"  -gt 0 ]    && echo "DRAFTS: $drafts"
   [ "$n_stack"   -gt 0 ]    && echo "STACK: $stack"

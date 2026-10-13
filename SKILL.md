@@ -267,7 +267,7 @@ belongs to a person. Never read or post through it.
 ```
 
 - `since` is the moment the file was created. **When the file is missing,
-  create it with `since` set to now, run `gate.sh --slack-ack`, and answer
+  create it with `since` set to now, run `gate.sh --slack-ack all`, and answer
   nothing.** That is the baseline: the loop never answers a message older than
   the day it was switched on, and no setting is needed for it.
 - `channels` holds the newest message `ts` the tick has dealt with, per channel.
@@ -349,8 +349,12 @@ Pass the asker's email and whether it is listed into the agent's prompt. The
 agent cannot read this config.
 
 **End the Slack part of every tick with `gate.sh --slack-ack`**, after the cache
-is written, including a tick that found nothing to answer. The ack records what
-the tick saw. An agent's reply moves a fingerprint later and wakes the loop
+is written, including a tick that found nothing to answer. **The ack covers only
+the channels and threads of the `SLACK` line the tick was shown.** A channel
+that moved while the tick worked was never read, so it stays unread and shows
+on the next probe. Name a thread the tick just opened to cover it too:
+`gate.sh --slack-ack <channel>/<thread ts>`. `gate.sh --slack-ack all` is the
+baseline on the day the watch is switched on, and nothing else. An agent's reply moves a fingerprint later and wakes the loop
 once; that tick sets the thread to `answered` and acks again.
 
 #### 2i — Tell one person about their inbox
@@ -369,7 +373,7 @@ server named `hyre` and prints the kinds that moved on the `INBOX` line.
 ```
 
 **When the file is missing, create it with `since` set to now, run
-`gate.sh --inbox-ack`, and send nothing.** The loop reports only what arrives
+`gate.sh --inbox-ack all`, and send nothing.** The loop reports only what arrives
 after it was switched on. Keep the last 300 ids per list.
 
 For each kind on the `INBOX` line, list the rows since `since` and take the ids
