@@ -241,6 +241,61 @@ slack_read() {
     '{at: $at, sigs: $sigs}' > "$SLACK_NOW"
 }
 
+# --- Inbox watch: one person's new emails, meetings and calls in Hyre ---
+# Off until LO_INBOX_EMAIL names the mailbox. Same shape as the Slack watch: the
+# gate fingerprints the newest rows through agent-codemode and names the kinds
+# that moved; the tick reads them, decides what is relevant and tells the person
+# in a Slack DM. Fingerprints hold ids only, never a subject or a name.
+INBOX_EMAIL="${LO_INBOX_EMAIL:-}"            # the mailbox to watch
+INBOX_USER_ID="${LO_INBOX_USER_ID:-}"        # that person's Hyre user id, for meetings and calls
+INBOX_SERVER="${LO_INBOX_SERVER:-hyre}"      # MCP server name in Claude Code
+INBOX_INTERVAL="${LO_INBOX_INTERVAL:-120}"   # seconds between real reads
+INBOX_SEEN=~/.claude/linear-orchestrator/gate-inbox-seen.json
+INBOX_NOW=~/.claude/linear-orchestrator/gate-inbox-now.json
+ISTATE=~/.claude/linear-orchestrator/gate-inbox-state
+INBOX_ERR=""
+INBOX_SIGS='{}'
+
+# inbox_read [fresh]: fill INBOX_SIGS with {emails, meetings, calls: fingerprint}.
+# A read that fails leaves its key out, so an outage never reads as a change.
+inbox_read() {
+  local now at out
+  INBOX_ERR=""; INBOX_SIGS='{}'
+  now=$(date +%s)
+  if [ "$1" != fresh ] && [ -f "$INBOX_NOW" ]; then
+    at=$(jq -r '.at // 0' "$INBOX_NOW" 2>/dev/null)
+    if [ $(( now - ${at:-0} )) -lt "$INBOX_INTERVAL" ]; then
+      INBOX_SIGS=$(jq -c '.sigs // {}' "$INBOX_NOW" 2>/dev/null || echo '{}')
+      return 0
+    fi
+  fi
+  inbox_one() {  # $1 key, $2 tool, $3 json args, $4 jq filter that lists the ids
+    out=$("$AC" call "$INBOX_SERVER" "$2" --json "$3" --text 2>/dev/null </dev/null \
+      | jq -c "$4" 2>/dev/null)
+    if [ -z "$out" ] || [ "$out" = null ]; then
+      INBOX_ERR="hyre read failed (claude mcp login $INBOX_SERVER?)"
+      return 0
+    fi
+    INBOX_SIGS=$(printf '%s' "$INBOX_SIGS" | jq -c --arg k "$1" \
+      --arg v "$(printf '%s' "$out" | hash16)" '.[$k] = $v')
+  }
+  inbox_one emails emails \
+    "{\"method\":\"get_emails\",\"response_format\":\"json\",\"params\":{\"user_email\":\"$INBOX_EMAIL\",\"perPage\":10}}" \
+    '[.emails[] | select(.direction == "inbound") | .id]'
+  if [ -n "$INBOX_USER_ID" ]; then
+    # Ordered by updated_at: a meeting shows up here when its transcript lands,
+    # which is later than its start and later than a shorter meeting after it.
+    inbox_one meetings meetings \
+      "{\"method\":\"get_meetings\",\"response_format\":\"json\",\"params\":{\"user_id\":\"$INBOX_USER_ID\",\"perPage\":10,\"order_by\":\"updated_at\"}}" \
+      '[.meetings[] | .id]'
+    inbox_one calls phone_calls \
+      "{\"method\":\"get_calls\",\"response_format\":\"json\",\"params\":{\"user_id\":\"$INBOX_USER_ID\",\"perPage\":10}}" \
+      '[.calls[] | [.id, .call_status, (.summary != null)]]'
+  fi
+  [ "$PEEK" = 1 ] || jq -nc --argjson at "$now" --argjson sigs "$INBOX_SIGS" \
+    '{at: $at, sigs: $sigs}' > "$INBOX_NOW"
+}
+
 MODE=once
 PEEK=0
 [ "$1" = "--peek" ] && PEEK=1
@@ -262,6 +317,16 @@ if [ "$1" = "--slack-ack" ]; then
   seen=$(cat "$SLACK_SEEN" 2>/dev/null); [ -n "$seen" ] || seen='{}'
   jq -nc --argjson s "$seen" --argjson n "$SLACK_SIGS" '$s + $n' > "$SLACK_SEEN"
   echo "slack: acknowledged $(printf '%s' "$SLACK_SIGS" | jq 'length') channel(s) and thread(s)${SLACK_ERR:+; $SLACK_ERR}"
+  exit 0
+fi
+
+# --inbox-ack: the tick has read the inbox watch and told the person.
+if [ "$1" = "--inbox-ack" ]; then
+  [ -n "$INBOX_EMAIL" ] || { echo "inbox: off (LO_INBOX_EMAIL is empty)"; exit 0; }
+  inbox_read fresh
+  seen=$(cat "$INBOX_SEEN" 2>/dev/null); [ -n "$seen" ] || seen='{}'
+  jq -nc --argjson s "$seen" --argjson n "$INBOX_SIGS" '$s + $n' > "$INBOX_SEEN"
+  echo "inbox: acknowledged $(printf '%s' "$INBOX_SIGS" | jq -c 'keys')${INBOX_ERR:+; $INBOX_ERR}"
   exit 0
 fi
 NOREASON=""
@@ -684,6 +749,21 @@ probe() {
   slacksig=$(printf '%s' "$slack" | hash16)
   prevslack=$(cat "$SLSTATE" 2>/dev/null)
 
+  # --- Inbox watch: which of emails, meetings, calls moved since the last ack ---
+  inbox='[]'
+  if [ -n "$INBOX_EMAIL" ]; then
+    if [ -x "$AC" ] || command -v "$AC" >/dev/null 2>&1; then
+      inbox_read
+      inbox_seen=$(cat "$INBOX_SEEN" 2>/dev/null); [ -n "$inbox_seen" ] || inbox_seen='{}'
+      inbox=$(jq -nc --argjson n "$INBOX_SIGS" --argjson s "$inbox_seen" \
+        '[ $n | to_entries[] | select($s[.key] != .value) | .key ]' 2>/dev/null || echo '[]')
+      [ -n "$INBOX_ERR" ] && notes="$notes${notes:+; }$INBOX_ERR"
+    fi
+  fi
+  n_inbox=$(printf '%s' "$inbox" | jq 'length')
+  inboxsig=$(printf '%s' "$inbox" | hash16)
+  previnbox=$(cat "$ISTATE" 2>/dev/null)
+
   # --- Linear ready column, but only when a slot could take it ---
   # Cheap pre-filter (assignee tier + not archived); the model still applies the
   # judgment drop-rules and dedups against open PRs. New candidate -> hash change.
@@ -776,6 +856,7 @@ probe() {
   [ "$n_feedback" -gt 0 ] && [ "$fbsig" != "$prevfb" ] && work=yes
   # Slack wakes once per change. The tick clears it with --slack-ack.
   [ "$n_slack" -gt 0 ] && [ "$slacksig" != "$prevslack" ] && work=yes
+  [ "$n_inbox" -gt 0 ] && [ "$inboxsig" != "$previnbox" ] && work=yes
   # A draft already surfaced on a prior probe is not work again on its own — only
   # a draft whose verdict actually changed since the state file was last saved.
   # Without the hash check, a draft the model has already looked at and can do
@@ -851,6 +932,7 @@ probe() {
       save_adopt_state "$adoptsig"
       [ "$PEEK" = 1 ] || printf '%s' "$slacksig" > "$SLSTATE"
       [ "$PEEK" = 1 ] || printf '%s' "$fbsig" > "$FSTATE"
+      [ "$PEEK" = 1 ] || printf '%s' "$inboxsig" > "$ISTATE"
       return 1
     fi
   fi
@@ -861,6 +943,7 @@ probe() {
   save_adopt_state "$adoptsig"
   [ "$PEEK" = 1 ] || printf '%s' "$slacksig" > "$SLSTATE"
   [ "$PEEK" = 1 ] || printf '%s' "$fbsig" > "$FSTATE"
+  [ "$PEEK" = 1 ] || printf '%s' "$inboxsig" > "$ISTATE"
 
   # --- otherwise: everything the model needs, nothing it does not ---
   echo "load1=$load freegb=$freegb diskgb=$diskgb busy=$busy slots=$slots max=$max_agents$capnote"
@@ -869,6 +952,7 @@ probe() {
   [ "$n_regate"  -gt 0 ]    && echo "REGATE: $regate"
   [ "$n_feedback" -gt 0 ]   && echo "FEEDBACK: $feedback"
   [ "$n_slack" -gt 0 ]      && echo "SLACK: $slack"
+  [ "$n_inbox" -gt 0 ]      && echo "INBOX: $inbox"
   [ "$n_invalid" -gt 0 ]    && echo "INVALID: $invalid"
   [ "$n_drafts"  -gt 0 ]    && echo "DRAFTS: $drafts"
   [ "$n_stack"   -gt 0 ]    && echo "STACK: $stack"

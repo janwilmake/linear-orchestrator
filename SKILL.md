@@ -32,6 +32,9 @@ and every tick read it:
 | `LO_SLACK`            | `SLACK_ON`          | `1` to watch Slack (default `0`). Needs a Claude Code MCP server named `slack` |
 | `LO_SLACK_TICKET_EMAILS` | `SLACK_TICKET_EMAILS` | Slack account emails that may order a ticket. Empty means nobody |
 | `LO_SLACK_DATA_EMAILS` | `SLACK_DATA_EMAILS` | Slack account emails that may ask for customer data, production included. Empty means nobody |
+| `LO_INBOX_EMAIL`      | `INBOX_EMAIL`       | the Hyre mailbox to watch (default empty: the inbox watch is off). Needs a Claude Code MCP server named `hyre` and the Slack watch |
+| `LO_INBOX_USER_ID`    | `INBOX_USER_ID`     | that person's Hyre user id; adds their meetings and calls to the watch |
+| `LO_INBOX_SLACK_USER` | `INBOX_SLACK_USER`  | the Slack user id that gets the DM |
 
 Fixed: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE` your repo's
 `CLAUDE.md` · `READY_STATUS` `Todo`, then `Backlog` only when `ALLOW_BACKLOG=1` ·
@@ -100,6 +103,7 @@ world-changed: yes
 REGATE: [ … ]            # promoted PRs that stopped being mergeable / went red
 FEEDBACK: [ … ]          # unanswered comments on the loop's PRs
 SLACK: [ … ]             # Slack channels and open threads that moved since the last ack
+INBOX: [ … ]             # which of emails, meetings, calls has a new row for the watched person
 INVALID: [ … ]           # PRs the user labelled invalid
 DRAFTS: [ … ]            # open loop drafts not already in an agent's hands
 STACK: [ … ]             # of those, the ones based on another branch
@@ -143,7 +147,7 @@ above is empty.
 
 1. **Human feedback** — an unanswered comment on one of the loop's PRs, or a PR
    marked `INVALID_LABEL` (2a). A `SLACK` line ranks with it (2s): a person is
-   waiting in both cases.
+   waiting in both cases. An `INBOX` line comes right after (2i).
 2. **De-gate** — a promoted PR that stopped being mergeable or went red (2b). A
    `RESTACK` line is a de-gate too.
 3. **Finish a draft** (2c).
@@ -348,6 +352,70 @@ agent cannot read this config.
 is written, including a tick that found nothing to answer. The ack records what
 the tick saw. An agent's reply moves a fingerprint later and wakes the loop
 once; that tick sets the thread to `answered` and acks again.
+
+#### 2i — Tell one person about their inbox
+
+Optional, and off until `LO_INBOX_EMAIL` is set. The loop watches one person's
+new emails, meetings and calls in Hyre, and sends that person a Slack DM about
+each one that matters. `gate.sh` fingerprints the newest rows through the MCP
+server named `hyre` and prints the kinds that moved on the `INBOX` line.
+
+`INBOX_CACHE` is `~/.claude/linear-orchestrator/<PREFIX>-inbox.json`:
+
+```json
+{ "since": "2026-10-13T08:00:00Z",
+  "told":    { "emails": ["1a13…"], "meetings": [], "calls": [] },
+  "skipped": { "emails": ["1a12…"], "meetings": [], "calls": [] } }
+```
+
+**When the file is missing, create it with `since` set to now, run
+`gate.sh --inbox-ack`, and send nothing.** The loop reports only what arrives
+after it was switched on. Keep the last 300 ids per list.
+
+For each kind on the `INBOX` line, list the rows since `since` and take the ids
+in neither list. **Read through `agent-codemode call hyre …` and project with
+`jq`**: `get_email` returns the whole HTML thread, which is far too much to read
+raw. Take `.latest_email` only, cut to a few thousand characters.
+
+- **emails** — `get_emails` with `user_email` and `start_date`; inbound only.
+- **meetings** — `get_meetings` with `user_id`, ordered by `updated_at`; only a
+  row that has a summary and whose `meeting_time` is after `since`.
+- **calls** — `get_calls` with `user_id` and `started_after`; only a completed
+  call that has a summary.
+
+**Relevant means the person would want to know now.** A message a human wrote
+that asks, answers, decides, complains or commits to something. Every meeting
+and every answered call with a real conversation in it. Not relevant: a
+newsletter, a notification from a tool, a receipt, an automatic calendar reply,
+a cold sales mail, a call nobody answered, a recording of a few seconds. When in
+doubt about an email, tell: a missed customer mail costs more than one extra DM.
+An id that is not relevant goes to `skipped`, and nothing is sent.
+
+**One DM per item**, as a new top-level message to `INBOX_SLACK_USER`, through
+the `slack` server. The rules of the Slack answer hold: the shortest message
+that carries everything useful, standard Markdown, no signature. Its shape:
+
+1. One line: what it is, who it is with, and the link.
+2. What was asked, decided or promised, in one to three lines.
+3. What the person should do next, when there is something to do.
+4. **Context, only when it helps:** earlier contact with the same people
+   (`find_conversation`), and, when the item is about the product, the ticket
+   or PR that covers it and its status. An item that raises a product question
+   the code must answer gets a **slack research** agent, told to post in the
+   thread of the DM. Everything else the tick writes itself.
+
+**The link back is not optional.** A meeting is
+`https://app.hyre.io/conversations/meeting/<id>` and a call
+`https://app.hyre.io/conversations/phone/<id>`, with the `id` of the row. An
+email links to its Gmail thread,
+`https://mail.google.com/mail/#all/<thread_id>`: the MCP returns no id the Hyre
+email page accepts.
+
+**Read only.** No `log_activity`, no draft, no task, no reply to the sender, no
+ticket. The DM is a Slack thread like any other: when the person replies with a
+question or orders a ticket there, 2s handles it.
+
+**End with `gate.sh --inbox-ack`**, after the cache is written.
 
 #### 2b — De-gate
 
