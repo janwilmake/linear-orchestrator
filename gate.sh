@@ -223,6 +223,14 @@ slack_read() {
       SLACK_ERR="slack read failed (claude mcp login $SLACK_SERVER?)"
       continue
     fi
+    # A message from a bot is not news: an alert channel would wake the loop on
+    # every alert, for the tick to skip it. Drop bot messages from the
+    # fingerprint, but keep their "Thread:" line, so a person who replies under
+    # an alert is still seen.
+    quiet=$(printf '%s' "$out" | jq -r '.messages // empty' 2>/dev/null | awk '
+      /^=== Message from / { bot = ($0 ~ /slack-bots\.com|botuser-/) }
+      !bot || /^Thread: / { print }')
+    [ -n "$quiet" ] && out="$quiet"
     SLACK_SIGS=$(printf '%s' "$SLACK_SIGS" | jq -c --arg k "$ch" \
       --arg v "$(printf '%s' "$out" | hash16)" '.[$k] = $v')
   done
