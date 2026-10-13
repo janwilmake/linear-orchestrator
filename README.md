@@ -136,12 +136,16 @@ running when the laptop sleeps. On the server:
 - Start the loop in a `screen` session, so it outlives your ssh connection:
   `screen -dmS orchestrator bash -lc 'cd /path/to/repo && claude --dangerously-skip-permissions "/linear-orchestrator start"'`.
 
-To watch it from a Mac, set `LO_REMOTE_HOST` (and, for the browser view,
-`LO_REMOTE_VNC_PASSWORD_FILE`) in `.env` and run `./watch-remote.sh`. It opens
-one Terminal window per agent and the orchestrator, adds windows for new agents,
-closes a window when its agent ends, and opens Screen Sharing on the server's
-Chrome. Ctrl-C, or `./watch-remote.sh stop`, closes every view; the loop keeps
-running.
+To watch it from a Mac or a Linux desktop, set `LO_REMOTE_HOST` (and, for the
+browser view, `LO_REMOTE_VNC_PASSWORD_FILE`) in `.env` and run
+`./watch-remote.sh`. It opens one terminal window per agent and the
+orchestrator, adds windows for new agents, closes a window when its agent ends,
+and opens a VNC view of the server's Chrome: Screen Sharing on a Mac; TigerVNC's
+`vncviewer`, else Remmina, on Linux. On Linux, `LO_REMOTE_TERMINAL` picks the
+terminal (for example `kitty` or `gnome-terminal --`); without it the script
+takes the first one it finds. Ctrl-C, or `./watch-remote.sh stop`, closes every
+view; the loop keeps running. Close a single window with the window manager,
+never Ctrl-C: keys typed in a window reach that agent.
 
 ## Configure with `.env`, not the skill file
 
