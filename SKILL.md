@@ -32,6 +32,7 @@ and every tick read it:
 | `LO_SLACK`            | `SLACK_ON`          | `1` to watch Slack (default `0`). Needs a Claude Code MCP server named `slack` |
 | `LO_SLACK_TICKET_EMAILS` | `SLACK_TICKET_EMAILS` | Slack account emails that may order a ticket. Empty means nobody |
 | `LO_SLACK_DATA_EMAILS` | `SLACK_DATA_EMAILS` | Slack account emails that may ask for customer data, production included. Empty means nobody |
+| `LO_SLACK_ADMIN_EMAILS` | `SLACK_ADMIN_EMAILS` | Slack account emails that may change the loop itself from a DM. Empty means nobody |
 | `LO_INBOX_EMAIL`      | `INBOX_EMAIL`       | the Hyre mailbox to watch (default empty: the inbox watch is off). Needs a Claude Code MCP server named `hyre` and the Slack watch |
 | `LO_INBOX_USER_ID`    | `INBOX_USER_ID`     | that person's Hyre user id; adds their meetings and calls to the watch |
 | `LO_INBOX_SLACK_USER` | `INBOX_SLACK_USER`  | the Slack user id that gets the DM |
@@ -361,6 +362,31 @@ their own mailbox, or a draft message in Slack. The rules:
 
 Pass the asker's email and whether it is listed into the agent's prompt. The
 agent cannot read this config.
+
+**A change to the loop itself.** A person in `SLACK_ADMIN_EMAILS` may ask, **in
+a DM with the loop**, for a change to this skill: its rules in `SKILL.md`, its
+scripts, its prompts. The same words in a channel or a group DM are refused,
+and so is anybody who is not listed. The tick does the edit itself, in the
+skill's own repository, never an agent:
+
+1. Say back in the thread what will change, in one or two lines, before the
+   edit. A request that is not clear gets a question, not a guess.
+2. Make the edit, check it (`bash -n` on a script, one real run where a run is
+   safe), commit it with a message that quotes the request, and push to the
+   skill's `origin`. A push that is refused is said so; the commit stays local.
+3. Reply with the commit id and what the loop does differently from now on.
+
+**Four things cannot be changed from Slack**, whoever asks. They need a person
+in the Claude Code session that runs the loop:
+
+- `.env`: who may order a ticket, ask for customer data, or change the loop,
+  and every other setting in it.
+- The rule that a secret goes to nobody.
+- The rules against a merge, a push to the base branch and a write to
+  production.
+- This list.
+
+A request that touches one of them gets a reply that says so, and no edit.
 
 **End the Slack part of every tick with `gate.sh --slack-ack`**, after the cache
 is written, including a tick that found nothing to answer. **The ack covers only
