@@ -513,6 +513,7 @@ probe() {
       created: (.createdAt // ""),
       mine: ((.body // "") | contains($m)),
       invalid: ([.labels[]?.name] | index("invalid") != null),
+      waiting: (((.body // "") | test("(?m)^## Blocked on")) or ([.labels[]?.name] | index("needs human") != null)),
       # Only a real verdict counts. Three things look like one and are not:
       #   ""         a run still QUEUED or IN_PROGRESS. GitHub returns an empty
       #              string here, NOT null, so a `!= null` guard lets it through
@@ -858,8 +859,12 @@ probe() {
   # the verdict fields a draft is judged on, not just the numbers: a draft whose
   # CI turned green or whose `mergeable` flipped must still wake, or a PR that
   # became promotable would sit unnoticed until the next unrelated change.
+  # A held draft (a `## Blocked on` notice or the `needs human` label) waits for a
+  # person, so its verdict moving is not news: a `dev` merge flips every
+  # `mergeable` and would wake the loop for drafts it must leave alone. It still
+  # shows on the DRAFTS line, so a wake for anything else still reviews it.
   draftsig=$(printf '%s' "$verdicts" | jq -Sc --argjson d "$drafts" \
-      '[ .[] | select(.pr as $p | $d | index($p)) | {pr,draft,merge,ci,base} ]' \
+      '[ .[] | select(.pr as $p | $d | index($p)) | select(.waiting | not) | {pr,draft,merge,ci,base} ]' \
       2>/dev/null)
   prevdrafts=$(cat "$DSTATE" 2>/dev/null)
   # A draft is news when it is new on the list or its verdict moved. A list that
