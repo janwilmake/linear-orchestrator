@@ -560,12 +560,16 @@ gh pr list --state open --base <BASE_BRANCH> --draft \
   --json number,title,body,files,reviews,comments,commits
 ```
 
-Classify each draft. **Check `## Blocked on` first** and promote on the spot:
+Classify each draft. **Check `## Blocked on` and the `needs human` label first**:
 
-- **blocked** — the body carries `## Blocked on` as a heading on its own line
-  (`grep -E '^## Blocked on'`, never as a substring — a PR writing *about* the
-  convention would otherwise be promoted unreviewed). `gh pr ready <PR#>` now,
-  whatever state the code is in; the body's `## Blocked on` notice says why. A research PR lands here by design. Record it and take no further action.
+- **held** — the body carries `## Blocked on` as a heading on its own line
+  (`grep -E '^## Blocked on'`, never as a substring), or the PR carries the
+  `needs human` label. **It stays a draft**: the notice or the label says what a
+  person owes, and a draft is how the team sees it is not done. The loop still
+  gives it every other gate below — review, fix, screenshot, mergeable — so it is
+  ready the moment the person answers. When the notice is gone from the body and
+  the label is removed, it is promoted like any other draft. A research PR lands
+  here by design. Never promote a held PR, and never remove its notice or label.
 - **needs-mergeable** — `mergeable` is `CONFLICTING`, or CI on the head commit is
   failing. `UNKNOWN` is not this state; it means ask again next tick.
 - **needs-split** — a reviewer read it and said it cannot be reviewed in one
@@ -583,7 +587,7 @@ Classify each draft. **Check `## Blocked on` first** and promote on the spot:
 - **ready** — `gh pr ready <PR#>` and drop it from the cache. This is the only
   place a PR is promoted, and it happens on evidence, never on an agent's say-so.
 
-Order after blocked: needs-mergeable, needs-fix, needs-split, needs-review,
+Order after held: needs-mergeable, needs-fix, needs-split, needs-review,
 needs-screenshot. Oldest PR first within a kind.
 
 #### 2e — Look after adopted PRs
@@ -681,7 +685,7 @@ behind its base is `RESTACK` / needs-mergeable work like any other.
 
 A vague description is **fine to take**; deciding what it meant is the agent's
 job. **A research ticket is work, not a skip** — the answer is the PR body, the
-diff stays empty, and it ships out of draft with `## Blocked on` naming the
+diff stays empty, and it stays a draft with `## Blocked on` naming the
 decision owed and a numbered list of options to answer.
 
 Order by priority (1 Urgent → 4 Low, 0 None last), then oldest `updatedAt`, and
@@ -781,7 +785,7 @@ it already has overrides what it correctly knew.
 > honest one on a ticket that specified everything. If a blocker is genuinely
 > undecidable — a missing credential, an unconnected account — ship what you have
 > with `## Blocked on` as the **first thing in the body**, never inside a
-> `<details>`; the orchestrator promotes that PR on its next tick.
+> `<details>`; the PR stays a draft until a person answers it.
 >
 > **A ticket that asks a question is answered in the PR body, not in code.** The
 > finding with its numbers, then a **numbered list of what to do next** — each
