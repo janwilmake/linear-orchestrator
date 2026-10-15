@@ -39,6 +39,8 @@ and every tick read it:
 | `LO_INBOX_EMAIL`      | `INBOX_EMAIL`       | the Hyre mailbox to watch (default empty: the inbox watch is off). Needs a Claude Code MCP server named `hyre` and the Slack watch |
 | `LO_INBOX_USER_ID`    | `INBOX_USER_ID`     | that person's Hyre user id; adds their meetings and calls to the watch |
 | `LO_INBOX_SLACK_USER` | `INBOX_SLACK_USER`  | the Slack user id that gets the DM |
+| `LO_BUDGET_5H` `LO_BUDGET_DAY` `LO_BUDGET_WEEK` | — | USD at list price that `lo-usage.sh` counts as 100% (default `500` / `1000` / `7000`) |
+| `LO_USAGE_WEEK_RESET` | — | when the plan's week resets, read off `/usage`, e.g. `mon 09:00`; empty = the last 7 days |
 
 Fixed: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE` your repo's
 `CLAUDE.md` · `READY_STATUS` `Todo`, then `Backlog` only when `ALLOW_BACKLOG=1` ·
@@ -718,11 +720,17 @@ One `cca` call per piece of work, from `REPO`, unsandboxed, all in a single Bash
 invocation:
 
 ```bash
-cca "<the full prompt>" --dangerously-skip-permissions --non-interactive --model opus
+sid=$(uuidgen | tr A-Z a-z)
+~/.claude/skills/linear-orchestrator/lo-usage.sh tag "$sid" <TICKET> --kind <new|2a|2b|2c|2e> [--pr <PR#>]
+cca "<the full prompt>" --dangerously-skip-permissions --non-interactive --model opus --session-id "$sid"
 ```
 
 All three flags are load-bearing: nobody is awake to answer a prompt;
 `--non-interactive` is what returns the slot to the pool; Opus for judgment.
+`--session-id` and the tag are what put the agent's cost on its ticket in the
+usage ledger; `lo-usage.sh` looks up the ticket's Linear project itself. Work on
+an existing PR passes the ticket from its branch. A failed tag never blocks the
+spawn.
 
 **Work aimed at an existing PR needs a dispatch marker, written in the same Bash
 call** (2a, 2b, 2c — a fresh ticket has no PR yet):
@@ -741,7 +749,10 @@ symlink into the user's checkout, so **no agent may run `npm install`**. See
 ### Step 5 — report and end
 
 One or two lines: the resource numbers, what was taken and of which kind, the
-slots, any PR promoted, what is left in each cache.
+slots, any PR promoted, what is left in each cache, and the three usage
+percentages from `~/.claude/skills/linear-orchestrator/lo-usage.sh` (run it every
+tick: it is also what settles finished agents into the ledger). The percentages
+are reported, not acted on, yet.
 
 **Report what landed, not what was dispatched** — every few ticks, check the PRs
 whose agents have exited and say how many actually carry the review and the fix
@@ -1159,7 +1170,8 @@ Also list the claimed tickets
 (`list_issues(team: TRACKER_TEAM, state: CLAIMED_STATUS)`) paired with their PRs —
 a claimed ticket with no open PR and no live agent is stranded, and this is the
 only place that shows it. Report both caches' entry counts and `builtAt` age, and
-the count of open PRs carrying `INVALID_LABEL`. Rebuild nothing.
+the count of open PRs carrying `INVALID_LABEL`, and the output of `lo-usage.sh`
+(the 5h, day and week windows and this week's spend per project). Rebuild nothing.
 
 ## Mode: stop
 
