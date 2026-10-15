@@ -236,6 +236,17 @@ it already opened under `Already ticketed:`. Link those and create nothing. Then
 search anyway:
 `list_issues(team: TRACKER_TEAM, query: "<subject>", includeArchived: false)`.
 
+**Every ticket has a project.** `lo-usage.sh` books an agent's cost on the
+Linear project of its ticket, so a ticket without one is cost nobody can place.
+Every ticket the loop creates (2a, 2s, a build-break fix, a follow-up) gets its
+project in the same `save_issue` that creates it. Every ticket the loop takes
+without one gets it at the claim (step 3). Pick the project from
+`list_projects(team: TRACKER_TEAM, includeArchived: false)`: the one whose
+summary covers the ticket's subject; for a follow-up, the project of the ticket
+or PR it follows. A defect that no topic owns goes to the team's catch-all
+project for bugs; any other ticket that fits none goes to its catch-all for the
+rest. Never leave the project empty, and never create a project for one ticket.
+
 **The `invalid` label**, per PR it names — find the ticket (branch name and body
 carry the id), move it back to `READY_STATUS`, `gh pr ready --undo`, log a `note`
 entry that it was picked up, and **remove the label only once the rework is actually
@@ -703,7 +714,8 @@ Per ticket, before any spawning:
 1. `get_issue(<id>)` — confirm it is still in `READY_STATUS` and still assigned
    within the tiers. If it moved, drop it and take the next entry.
 2. Move it to `CLAIMED_STATUS` **and assign it to `ASSIGNEE_TIER_1`** in one
-   `save_issue`, whichever tier it came from.
+   `save_issue`, whichever tier it came from. When the ticket has no Linear
+   project, set one in the same call (see "Every ticket has a project").
 
 **Never comment on a Linear ticket.** The status move is the pickup record, and
 Linear's GitHub integration links the PR to the ticket through the branch name
