@@ -5,12 +5,6 @@
 A [Claude Code](https://claude.com/claude-code) skill that runs your Linear board
 overnight and hands you a morning of pull requests to read.
 
-> There is an experimental second generation,
-> [linear-orchestrator2](https://github.com/janwilmake/linear-orchestrator2),
-> which moves the whole conversation — body, screenshots, review, steering —
-> into the Linear ticket. This repo is the maintained generation: the
-> conversation lives on the pull request, and you steer by commenting there.
-
 ![How it works: you write a ticket, the gate waits for free memory, agents write the code, a fresh agent reviews it, and you get a PR to read](./hero.svg)
 
 ![The nightly factory: a ticket flows in from Linear, through the gate, a coding agent that opens a full-bodied draft PR, and a fresh reviewing agent, and a reviewed ready PR flows out to GitHub — where the conversation lives, and your comment becomes tomorrow's ticket](./demo.gif)
