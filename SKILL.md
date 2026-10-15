@@ -532,8 +532,13 @@ top-level message:
 
 1. Post a new top-level message in `LO_INTERCOM_DISCUSSION`: one line with who
    wrote (the organization, or the person when there is no organization), the
-   question in a few words, and the Slack permalink of the bot message
+   question in a few words, the Intercom link of the conversation, and the Slack
+   permalink of the bot message
    (`https://<workspace>.slack.com/archives/<channel>/p<ts without the dot>`).
+   Under that line, **quote the customer's original message** from the bot
+   message, as a `>` block. (Wijnand, 15 Oct 2026: "the links to intercom is
+   great, but can you also quote the original thread in #intercom too? having
+   both would be great".)
    Add it to `threads` with `status: "researching"`, and record the pair in
    `SLACK_CACHE` under `intercom` as `{ "<bot message ts>": "<discussion ts>" }`.
 2. Dispatch one **intercom research** agent on that thread (the slack research
