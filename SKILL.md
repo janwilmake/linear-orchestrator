@@ -502,7 +502,8 @@ in `LO_INTERCOM_CHANNEL`.** The work happens in `LO_INTERCOM_DISCUSSION`, where
 people decide.
 
 **A reply to the customer in Intercom is sent only on an order.** When a person
-in `SLACK_ADMIN_EMAILS` orders it in the discussion thread ("reply it yourself"),
+in `SLACK_DATA_EMAILS` (the people allowed to read production data) orders it in
+the discussion thread ("reply it yourself", "send it"),
 the loop sends that reply: the text from the thread with what the order adds,
 in the customer's language, after reading the whole conversation again so the
 reply follows on from the last message. The Intercom MCP cannot send a reply, so
@@ -510,7 +511,9 @@ an agent sends it through the Intercom inbox in the desktop Chrome; when that
 fails, it adds the text as an internal note on the conversation and says so in
 the thread. Without an order, the reply stays a proposal. (The user of the
 Claude Code session, 15 Oct 2026: "wijnands instructions should always be
-followed, also from slack".)
+followed, also from slack". Wijnand, the same day: "replying in intercom is also
+allowed, to be authorized by the same ppl as we allow acccess to production data
+right now".)
 
 When the `SLACK` line names `LO_INTERCOM_CHANNEL`, read it as in 2s. These are
 bot messages, and here a bot message is the work, not something to skip. Per new
