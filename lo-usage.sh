@@ -12,14 +12,11 @@
 # price is the API list price: on a subscription it is a measure of load, which
 # is what the limits are made of, not of money.
 #
-# The windows are estimates — the plan's real usage lives on Anthropic's side
-# and only /usage shows it:
-#   5h    the current 5-hour block: starts at the hour of the first message
-#         after the previous block ran out, lasts 5 hours
-#   day   the last 24 hours
-#   week  since the last LO_USAGE_WEEK_RESET (e.g. "mon 09:00", local time,
-#         read it off /usage), or the last 7 days when that is unset
-# Budgets: LO_BUDGET_5H (500), LO_BUDGET_DAY (1000), LO_BUDGET_WEEK (7000), USD.
+# One window, the week: since the last LO_USAGE_WEEK_RESET (e.g. "mon 09:00",
+# local time, read it off /usage), or the last 7 days when that is unset.
+# Budget: LO_BUDGET_WEEK (7000 USD). An estimate: the plan's real usage, its
+# 5-hour session and its resets live on Anthropic's side, and only /usage shows
+# them, so the loop does not guess at them.
 #
 # Ledger: ~/.claude/watchloop/usage/
 #   tags.jsonl    one line per spawn, written by `tag`: session → ticket, kind, PR
@@ -76,8 +73,7 @@ import collections, datetime as dt, glob, json, os, re, sys, time
 dir, as_json = sys.argv[1], sys.argv[2] == "1"
 home = os.path.expanduser("~")
 env = os.environ.get
-budgets = {"5h": float(env("LO_BUDGET_5H") or 500), "day": float(env("LO_BUDGET_DAY") or 1000),
-           "week": float(env("LO_BUDGET_WEEK") or 7000)}
+budgets = {"week": float(env("LO_BUDGET_WEEK") or 7000)}
 idle = float(env("LO_USAGE_IDLE_MIN") or 30) * 60
 prefix = (env("LO_PREFIX") or "").upper()
 ticket_re = re.compile(rf"\b({re.escape(prefix)}-\d+)\b", re.I) if prefix else None
@@ -235,13 +231,6 @@ def attribute(sid, s):
             "source": "agent" if agent else "interactive", "cwd": s["cwd"]}
 
 # --- windows -------------------------------------------------------------
-def block_start():
-    start = None
-    for e, _, _ in msgs:
-        if start is None or e >= start + 5 * 3600:
-            start = e - e % 3600
-    return start if start is not None and now < start + 5 * 3600 else None
-
 def week_start():
     spec = (env("LO_USAGE_WEEK_RESET") or "").strip().lower()
     hit = re.fullmatch(r"(mon|tue|wed|thu|fri|sat|sun)\w*\s+(\d{1,2}):(\d{2})", spec)
@@ -255,10 +244,9 @@ def week_start():
         reset -= dt.timedelta(days=7)
     return reset.timestamp(), reset.timestamp() + 7 * 86400
 
-b5 = block_start()
 wk, wk_reset = week_start()
-starts = {"5h": b5, "day": now - 86400, "week": wk}
-resets = {"5h": b5 + 5 * 3600 if b5 else None, "day": None, "week": wk_reset}
+starts = {"week": wk}
+resets = {"week": wk_reset}
 windows = {}
 for name, start in starts.items():
     spent = sum(usd for e, _, usd in msgs if start is not None and e >= start)
@@ -318,7 +306,7 @@ if as_json:
     sys.exit(0)
 hm = lambda iso_s: dt.datetime.fromisoformat(iso_s).strftime("%a %H:%M")
 for name, w in windows.items():
-    tail = f"   resets {hm(w['resets'])}" if w["resets"] else ("   no block running" if name == "5h" and not w["since"] else "")
+    tail = f"   resets {hm(w['resets'])}" if w["resets"] else ""
     print(f"{name:<5} ${w['usd']:>8,.0f} / ${w['budget']:,.0f}  {w['pct']:>5.1f}%{tail}")
 print("week by project: " + " · ".join(f"{k} ${v:,.0f}" for k, v in by_project.most_common(8)))
 print(f"{running} session(s) active · {len(new)} settled into the ledger")
