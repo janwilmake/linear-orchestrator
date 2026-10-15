@@ -42,6 +42,7 @@ and every tick read it:
 | `LO_BUDGET_5H` `LO_BUDGET_DAY` `LO_BUDGET_WEEK` | — | USD at list price that `lo-usage.sh` counts as 100% (default `500` / `1000` / `7000`) |
 | `LO_USAGE_WEEK_RESET` | — | when the plan's week resets, read off `/usage`, e.g. `mon 09:00`; empty = the last 7 days |
 | `LO_WEEKLY_CHANNEL` | — | Slack channel id for the weekly report; empty = no report. Needs `LO_USAGE_WEEK_RESET` and `LO_SLACK=1` |
+| `LO_INTERCOM_CHANNEL` `LO_INTERCOM_DISCUSSION` | — | the Slack channel where a bot posts each new Intercom conversation, and the channel where the loop opens one research thread per conversation (2t); empty = off |
 
 Fixed: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE` your repo's
 `CLAUDE.md` · `READY_STATUS` `Todo`, then `Backlog` only when `ALLOW_BACKLOG=1` ·
@@ -154,7 +155,7 @@ above is empty.
 
 1. **Human feedback** — an unanswered comment on one of the loop's PRs, or a PR
    marked `INVALID_LABEL` (2a). A `SLACK` line ranks with it (2s): a person is
-   waiting in both cases. An `INBOX` line comes right after (2i).
+   waiting in both cases. A new Intercom conversation (2t) ranks with Slack. An `INBOX` line comes right after (2i).
 2. **De-gate** — a promoted PR that stopped being mergeable or went red (2b). A
    `RESTACK` line is a de-gate too.
 3. **Finish a draft** (2c).
@@ -491,6 +492,56 @@ on the next probe. Name a thread the tick just opened to cover it too:
 `gate.sh --slack-ack <channel>/<thread ts>`. `gate.sh --slack-ack all` is the
 baseline on the day the watch is switched on, and nothing else. An agent's reply moves a fingerprint later and wakes the loop
 once; that tick sets the thread to `answered` and acks again.
+
+#### 2t — Research every Intercom conversation
+
+Off until `LO_INTERCOM_CHANNEL` and `LO_INTERCOM_DISCUSSION` are set. A bot posts
+each new Intercom conversation as a top-level message in `LO_INTERCOM_CHANNEL`,
+and a customer's follow-up as a reply under it. **The loop never posts or reacts
+in `LO_INTERCOM_CHANNEL` and never replies in Intercom.** The work happens in
+`LO_INTERCOM_DISCUSSION`, where people decide.
+
+When the `SLACK` line names `LO_INTERCOM_CHANNEL`, read it as in 2s. These are
+bot messages, and here a bot message is the work, not something to skip. Per new
+top-level message:
+
+1. Post a new top-level message in `LO_INTERCOM_DISCUSSION`: one line with who
+   wrote (the organization, or the person when there is no organization), the
+   question in a few words, and the Slack permalink of the bot message
+   (`https://<workspace>.slack.com/archives/<channel>/p<ts without the dot>`).
+   Add it to `threads` with `status: "researching"`, and record the pair in
+   `SLACK_CACHE` under `intercom` as `{ "<bot message ts>": "<discussion ts>" }`.
+2. Dispatch one **intercom research** agent on that thread (the slack research
+   prompt, with what is below), tagged with `-` and `--kind 2s`.
+
+A customer's follow-up (a reply under a bot message the `intercom` map knows)
+gets one more research agent on the same discussion thread, told what is new.
+People's replies in the discussion thread are 2s work like any thread the loop
+is in: a steer gets a revised answer, "ticket 2" a ticket.
+
+**The intercom research prompt** adds to the slack research prompt:
+
+* The conversation is in Intercom: read it whole through the Intercom MCP
+  (`search_conversations`, `get_conversation`), not only the bot's preview, and
+  put its Intercom link in the first line of the answer.
+* Research it like any triage: production read only (the customer's
+  organization, the records the question is about, the logs), the code, Linear
+  and the open PRs.
+* Post, in this order: the TLDR line; what is going on, with what was verified;
+  **numbered actions** to decide on, each with who does it and its cost; and a
+  **proposed reply** in the customer's own language, ready to paste, that
+  promises nothing the findings do not support.
+* Customer data is allowed in this channel: a person on `SLACK_DATA_EMAILS`
+  ordered it for this channel. A secret never is.
+* Never reply in Intercom, never post in `LO_INTERCOM_CHANNEL`, no write to any
+  system.
+
+The order came from Wijnand in a DM on 15 Oct 2026: "for each thread in
+intercom, open a thread that references the intercom thread, in
+#intercom-discussion, and research the relevant information from production
+data, our codebase, and other sources you have acccess to. then propose the
+relevant actions to take, so we can decide on it. also, propose a response msg
+we can then easily ok or send ourselves."
 
 #### 2i — Tell one person about their inbox
 
