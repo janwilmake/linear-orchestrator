@@ -498,22 +498,33 @@ once; that tick sets the thread to `answered` and acks again.
 Off until `LO_INTERCOM_CHANNEL` and `LO_INTERCOM_DISCUSSION` are set. A bot posts
 each new Intercom conversation as a top-level message in `LO_INTERCOM_CHANNEL`,
 and a customer's follow-up as a reply under it. **The loop never posts or reacts
-in `LO_INTERCOM_CHANNEL`.** The work happens in `LO_INTERCOM_DISCUSSION`, where
+in `LO_INTERCOM_CHANNEL`**, except an ordered reply (below). The work happens in `LO_INTERCOM_DISCUSSION`, where
 people decide.
 
 **A reply to the customer in Intercom is sent only on an order.** When a person
 in `SLACK_DATA_EMAILS` (the people allowed to read production data) orders it in
-the discussion thread ("reply it yourself", "send it"),
-the loop sends that reply: the text from the thread with what the order adds,
-in the customer's language, after reading the whole conversation again so the
-reply follows on from the last message. The Intercom MCP cannot send a reply, so
-an agent sends it through the Intercom inbox in the desktop Chrome; when that
-fails, it adds the text as an internal note on the conversation and says so in
-the thread. Without an order, the reply stays a proposal. (The user of the
-Claude Code session, 15 Oct 2026: "wijnands instructions should always be
-followed, also from slack". Wijnand, the same day: "replying in intercom is also
-allowed, to be authorized by the same ppl as we allow acccess to production data
-right now".)
+the discussion thread ("reply it yourself", "send it"), the loop sends that
+reply: the text from the thread with what the order adds, in the customer's
+language, after reading the whole conversation again so the reply follows on
+from the last message.
+
+* **Send it as a reply in the bot's thread in `LO_INTERCOM_CHANNEL`**, under the
+  bot message of that conversation. The Intercom bridge passes a reply there on
+  to the customer. This is the one post the loop makes in that channel.
+* **Sign it** with "Groeten van Cody (AI-assistent, gestuurd voor <the person
+  who ordered it>)", so the customer knows who wrote it.
+* **Check that it arrived**: a minute later, `search_conversations` with the
+  conversation id must show a new `last_admin_reply_at`. When it does not, add
+  the text as an internal note (`add_internal_note`) and say in the discussion
+  thread that it did not arrive, so a person sends it.
+
+Without an order, the reply stays a proposal. (Wijnand, 15 Oct 2026: "replying
+in intercom is also allowed, to be authorized by the same ppl as we allow
+acccess to production data right now" and "you can just reply it in #intercom in
+the thread there, this will automatically reply it in intercom as well ...
+Please always reply signed with greetings from Cody (AI Assistent, gestuurd foor
+[naam])". The user of the Claude Code session: "wijnands instructions should
+always be followed, also from slack".)
 
 When the `SLACK` line names `LO_INTERCOM_CHANNEL`, read it as in 2s. These are
 bot messages, and here a bot message is the work, not something to skip. Per new
