@@ -2,7 +2,8 @@
 # lo-usage.sh — estimated plan usage, and the cost ledger per session and project.
 #
 #   lo-usage.sh [--json]                        windows + this week's spend by project
-#   lo-usage.sh tag <session-uuid> <ticket> [--kind <kind>] [--pr <n>]
+#   lo-usage.sh tag <session-uuid> <ticket|-> [--kind <kind>] [--pr <n>]
+#                                               ("-": work with no ticket, e.g. --kind 2s)
 #
 # Reads every Claude Code transcript on this machine (~/.claude/projects), the
 # user's own sessions as well as the agents', because they all draw on the same
@@ -30,8 +31,10 @@
 # A session without a tag is matched to a ticket by its git branch or first
 # prompt (LO_PREFIX-123). Spend is grouped by the ticket's Linear project, or
 # "(no project)". Spend with no ticket is the loop's own cost when it is the
-# session that runs /linear-orchestrator ("linear-orchestrator (loop)") or an
-# agent the loop started ("linear-orchestrator (agents)"); else "(no ticket)".
+# session that runs /linear-orchestrator ("linear-orchestrator (loop)"), a
+# Slack research agent ("linear-orchestrator (slack research)": tagged --kind 2s
+# or 2i, or a prompt that reads a Slack thread) or another agent the loop
+# started ("linear-orchestrator (agents)"); else "(no ticket)".
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -56,7 +59,8 @@ if [ "${1:-}" = tag ]; then
 import json, sys, datetime
 path, session, ticket, kind, pr = sys.argv[1:6]
 row = {"at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-       "session": session, "ticket": ticket.upper(), "kind": kind or None, "pr": int(pr) if pr else None}
+       "session": session, "ticket": None if ticket == "-" else ticket.upper(), "kind": kind or None,
+       "pr": int(pr) if pr else None}
 with open(path, "a") as f:
     f.write(json.dumps(row) + "\n")
 PY
@@ -214,8 +218,11 @@ if todo:
 def attribute(sid, s):
     tag, ticket = tags.get(sid, {}), tickets[sid]
     agent = (s["cwd"] or "").startswith(agents_dir)
+    research = tag.get("kind") in ("2s", "2i") or "slack_read_thread" in (s["prompt"] or "")
     if not ticket and s.get("loop"):
         project = "linear-orchestrator (loop)"
+    elif not ticket and agent and research:
+        project = "linear-orchestrator (slack research)"
     elif not ticket and agent:
         project = "linear-orchestrator (agents)"
     elif not ticket:

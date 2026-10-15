@@ -741,8 +741,10 @@ All three flags are load-bearing: nobody is awake to answer a prompt;
 `--non-interactive` is what returns the slot to the pool; Opus for judgment.
 `--session-id` and the tag are what put the agent's cost on its ticket in the
 usage ledger; `lo-usage.sh` looks up the ticket's Linear project itself. Work on
-an existing PR passes the ticket from its branch. A failed tag never blocks the
-spawn.
+an existing PR passes the ticket from its branch. Work with no ticket, a Slack
+research agent above all, passes `-` as the ticket and `--kind 2s` (or `2i` for
+an inbox item), so its cost shows as "linear-orchestrator (slack research)". A
+failed tag never blocks the spawn.
 
 **Work aimed at an existing PR needs a dispatch marker, written in the same Bash
 call** (2a, 2b, 2c — a fresh ticket has no PR yet):
