@@ -42,10 +42,12 @@ uses whatever the machine has: it measures free memory every probe and runs as m
 agents as will really fit — one per `LO_RAM_PER_AGENT` gigabytes — so parallelism
 is bounded by your laptop rather than by a plan.
 
-**It never merges.** Author and reviewer are the same model, so "no blockers left"
-is evidence about care, not proof of correctness. The loop stops at a reviewed,
-non-draft PR and leaves the merge to a person. That is a choice, not a missing
-feature.
+**A person decides every merge.** Author and reviewer are the same model, so "no
+blockers left" is evidence about care, not proof of correctness. The loop stops at
+a reviewed, non-draft PR. It merges only when a person on the merge list
+(`LO_SLACK_MERGE_EMAILS`) names that PR in Slack. The one standing order is the fix
+of a small break of the base branch build: a type, lint or test failure with one
+cause and no change a user sees. The loop never merges into the default branch.
 
 ## What it does, in order
 
