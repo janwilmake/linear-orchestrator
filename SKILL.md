@@ -305,6 +305,15 @@ messages without `oldest`**. A new message is one of two things:
   `channels` value, and take the replies newer than that value. A read with
   `oldest` hides the parent, so it never finds these.
 
+**Put 👀 on every message the loop acts on**, as soon as the tick decides to act
+and before the work starts: a research agent, a ticket order, a merge order, a
+draft, a change to the loop or to `.env`. Call `slack_add_reaction` on the
+`slack` server with `channel_id`, `message_ts` (the message's own `ts`, a reply
+included) and `emoji: "eyes"`. The person then sees the loop picked it up; the
+answer can take a while. A message the loop stays out of gets no reaction. A
+failed reaction never stops the work. (The user of the Claude Code session asked
+for this on 15 Oct 2026.)
+
 After the channel is handled, set its `channels` value to the newest `ts` seen,
 top-level or reply. Then, per message that is new:
 
