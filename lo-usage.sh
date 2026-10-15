@@ -29,7 +29,9 @@
 #   tickets.json  cache of ticket → Linear project, looked up through agent-codemode
 # A session without a tag is matched to a ticket by its git branch or first
 # prompt (LO_PREFIX-123). Spend is grouped by the ticket's Linear project, or
-# "(no project)" / "(no ticket)".
+# "(no project)". Spend with no ticket is the loop's own cost when it is the
+# session that runs /linear-orchestrator ("linear-orchestrator (loop)") or an
+# agent the loop started ("linear-orchestrator (agents)"); else "(no ticket)".
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -125,6 +127,8 @@ for sid, f, sub in files:
                               "cost_state": None})
     seen = set()
     for line in open(f, "rb"):
+        if not sub and b"<command-name>/linear-orchestrator" in line:
+            s["loop"] = True
         if b'"usage"' not in line and b'"cost-state"' not in line and (s["cwd"] and s["prompt"]):
             continue
         try:
@@ -209,13 +213,17 @@ if todo:
 
 def attribute(sid, s):
     tag, ticket = tags.get(sid, {}), tickets[sid]
-    if not ticket:
+    agent = (s["cwd"] or "").startswith(agents_dir)
+    if not ticket and s.get("loop"):
+        project = "linear-orchestrator (loop)"
+    elif not ticket and agent:
+        project = "linear-orchestrator (agents)"
+    elif not ticket:
         project = "(no ticket)"
     elif ticket not in tcache:
         project = "(unknown project)"
     else:
         project = tcache[ticket].get("project") or "(no project)"
-    agent = (s["cwd"] or "").startswith(agents_dir)
     return {"ticket": ticket, "project": project, "kind": tag.get("kind"), "pr": tag.get("pr"),
             "source": "agent" if agent else "interactive", "cwd": s["cwd"]}
 
