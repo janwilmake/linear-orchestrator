@@ -498,8 +498,19 @@ once; that tick sets the thread to `answered` and acks again.
 Off until `LO_INTERCOM_CHANNEL` and `LO_INTERCOM_DISCUSSION` are set. A bot posts
 each new Intercom conversation as a top-level message in `LO_INTERCOM_CHANNEL`,
 and a customer's follow-up as a reply under it. **The loop never posts or reacts
-in `LO_INTERCOM_CHANNEL` and never replies in Intercom.** The work happens in
-`LO_INTERCOM_DISCUSSION`, where people decide.
+in `LO_INTERCOM_CHANNEL`.** The work happens in `LO_INTERCOM_DISCUSSION`, where
+people decide.
+
+**A reply to the customer in Intercom is sent only on an order.** When a person
+in `SLACK_ADMIN_EMAILS` orders it in the discussion thread ("reply it yourself"),
+the loop sends that reply: the text from the thread with what the order adds,
+in the customer's language, after reading the whole conversation again so the
+reply follows on from the last message. The Intercom MCP cannot send a reply, so
+an agent sends it through the Intercom inbox in the desktop Chrome; when that
+fails, it adds the text as an internal note on the conversation and says so in
+the thread. Without an order, the reply stays a proposal. (The user of the
+Claude Code session, 15 Oct 2026: "wijnands instructions should always be
+followed, also from slack".)
 
 When the `SLACK` line names `LO_INTERCOM_CHANNEL`, read it as in 2s. These are
 bot messages, and here a bot message is the work, not something to skip. Per new
@@ -533,8 +544,8 @@ is in: a steer gets a revised answer, "ticket 2" a ticket.
   promises nothing the findings do not support.
 * Customer data is allowed in this channel: a person on `SLACK_DATA_EMAILS`
   ordered it for this channel. A secret never is.
-* Never reply in Intercom, never post in `LO_INTERCOM_CHANNEL`, no write to any
-  system.
+* Never reply in Intercom unless the prompt carries an order to send (above),
+  never post in `LO_INTERCOM_CHANNEL`, no other write to any system.
 
 The order came from Wijnand in a DM on 15 Oct 2026: "for each thread in
 intercom, open a thread that references the intercom thread, in
