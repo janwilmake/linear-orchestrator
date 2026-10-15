@@ -272,6 +272,20 @@ for e, sid, usd in msgs:
     if e >= wk:
         by_project[attr[sid]["project"]] += usd
 
+# The week that ended at the last reset, for the weekly report. Only with a
+# reset set: "the last 7 days" has no week that ended.
+last_week = None
+if wk_reset:
+    lw_by = collections.Counter()
+    for e, sid, usd in msgs:
+        if wk - 7 * 86400 <= e < wk:
+            lw_by[attr[sid]["project"]] += usd
+    iso_local = lambda e: dt.datetime.fromtimestamp(e).astimezone().isoformat(timespec="minutes")
+    last_week = {"usd": round(sum(lw_by.values()), 2), "budget": budgets["week"],
+                 "pct": round(100 * sum(lw_by.values()) / budgets["week"], 1),
+                 "since": iso_local(wk - 7 * 86400), "until": iso_local(wk),
+                 "by_project": {k: round(v, 2) for k, v in lw_by.most_common()}}
+
 # --- ledger --------------------------------------------------------------
 ledger_path = f"{dir}/ledger.jsonl"
 settled = {r["session"]: r.get("last") for r in read_jsonl(ledger_path)}
@@ -296,6 +310,7 @@ if new:
 # --- output --------------------------------------------------------------
 running = sum(1 for s in sess.values() if now - s["last"] < idle)
 out = {"windows": windows, "week_by_project": {k: round(v, 2) for k, v in by_project.most_common()},
+       "last_week": last_week,
        "sessions_active": running, "ledger_new": len(new),
        "unknown_models": sorted(m for m in unknown_models if m)}
 if as_json:

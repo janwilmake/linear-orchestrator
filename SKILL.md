@@ -41,6 +41,7 @@ and every tick read it:
 | `LO_INBOX_SLACK_USER` | `INBOX_SLACK_USER`  | the Slack user id that gets the DM |
 | `LO_BUDGET_5H` `LO_BUDGET_DAY` `LO_BUDGET_WEEK` | — | USD at list price that `lo-usage.sh` counts as 100% (default `500` / `1000` / `7000`) |
 | `LO_USAGE_WEEK_RESET` | — | when the plan's week resets, read off `/usage`, e.g. `mon 09:00`; empty = the last 7 days |
+| `LO_WEEKLY_CHANNEL` | — | Slack channel id for the weekly report; empty = no report. Needs `LO_USAGE_WEEK_RESET` and `LO_SLACK=1` |
 
 Fixed: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE` your repo's
 `CLAUDE.md` · `READY_STATUS` `Todo`, then `Backlog` only when `ALLOW_BACKLOG=1` ·
@@ -767,6 +768,15 @@ slots, any PR promoted, what is left in each cache, and the three usage
 percentages from `~/.claude/skills/linear-orchestrator/lo-usage.sh` (run it every
 tick: it is also what settles finished agents into the ledger). The percentages
 are reported, not acted on, yet.
+
+**The weekly report.** Every tick with `LO_SLACK=1` also runs
+`~/.claude/skills/linear-orchestrator/lo-weekly.sh`. It prints nothing until a
+report is due: once per week, from each `LO_USAGE_WEEK_RESET` on. Then it prints
+the report for the week that just ended: the plan usage per project, the PRs
+merged into `BASE_BRANCH` and how many the loop opened, and the lines added,
+removed and net. Post that text unchanged as a new message to
+`LO_WEEKLY_CHANNEL` through the `slack` server, then run `lo-weekly.sh --done`.
+A post that fails gets no `--done`, so the next tick tries again.
 
 **Report what landed, not what was dispatched** — every few ticks, check the PRs
 whose agents have exited and say how many actually carry the review and the fix
