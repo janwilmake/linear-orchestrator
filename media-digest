@@ -40,8 +40,10 @@ case "$src" in
     fid="${src#slack:}"
     agent-codemode call "${LO_SLACK_SERVER:-slack}" slack_read_file --json "{\"file_id\":\"$fid\"}" --raw \
       2>/dev/null > "$out/slack.json"
-    ext=$(jq -r '.content[]? | select(.type=="resource") | .resource.mimeType' "$out/slack.json" 2>/dev/null | head -1 | cut -d/ -f2)
-    jq -r '.content[]? | select(.type=="resource") | .resource.blob' "$out/slack.json" 2>/dev/null \
+    # A video or document comes as a "resource" with a blob; a voice note as
+    # an "audio" (or "image") part with data and mimeType at the top level.
+    ext=$(jq -r '.content[]? | (.resource.mimeType // (select(.type=="audio" or .type=="image") | .mimeType)) // empty' "$out/slack.json" 2>/dev/null | head -1 | cut -d/ -f2)
+    jq -r '.content[]? | (.resource.blob // (select(.type=="audio" or .type=="image") | .data)) // empty' "$out/slack.json" 2>/dev/null | head -1 \
       | base64 -d > "$out/source.${ext:-bin}" 2>/dev/null
     rm -f "$out/slack.json"
     file="$out/source.${ext:-bin}"
