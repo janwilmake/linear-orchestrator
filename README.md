@@ -1,4 +1,4 @@
-# 🎼 Linear Orchestrator
+# 🎼 watchloop
 
 **Tickets in. Reviewed pull requests out. Nobody watching.**
 
@@ -99,10 +99,19 @@ You also need `gh` (authenticated), `jq`, and the
 the loop.
 
 ```bash
-git clone https://github.com/janwilmake/linear-orchestrator.git \
-  ~/.claude/skills/linear-orchestrator
-cd ~/.claude/skills/linear-orchestrator
+git clone https://github.com/janwilmake/watchloop.git \
+  ~/.claude/skills/watchloop
+cd ~/.claude/skills/watchloop
 cp .env.example .env && $EDITOR .env
+```
+
+**Installed it before 15 Oct 2026, as `linear-orchestrator`?** Move both
+folders, point the remote at the new name, and start it with `/watchloop`:
+
+```bash
+mv ~/.claude/skills/linear-orchestrator ~/.claude/skills/watchloop
+mv ~/.claude/linear-orchestrator ~/.claude/watchloop
+git -C ~/.claude/skills/watchloop remote set-url origin https://github.com/janwilmake/watchloop.git
 ```
 
 Then start it from your repo:
@@ -113,7 +122,7 @@ claude --dangerously-skip-permissions
 ```
 
 ```
-/linear-orchestrator
+/watchloop
 ```
 
 `status` reports what is running; `stop` ends the loop and lists the PRs it
@@ -136,7 +145,7 @@ running when the laptop sleeps. On the server:
   `cca` passes `--chrome` only when Chrome is installed; without it, agents test
   with headless Playwright.
 - Start the loop in a `screen` session, so it outlives your ssh connection:
-  `screen -dmS orchestrator bash -lc 'cd /path/to/repo && claude --dangerously-skip-permissions "/linear-orchestrator start"'`.
+  `screen -dmS orchestrator bash -lc 'cd /path/to/repo && claude --dangerously-skip-permissions "/watchloop start"'`.
 
 To watch it from a Mac or a Linux desktop, set `LO_REMOTE_HOST` (and, for the
 browser view, `LO_REMOTE_VNC_PASSWORD_FILE`) in `.env` and run

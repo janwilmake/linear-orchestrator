@@ -42,7 +42,7 @@ TIER2="${LO_TIER2:-}"               # fallback assignee display name
 # never queued — so each is a deliberate switch, not a default.
 ALLOW_UNASSIGNED="${LO_ALLOW_UNASSIGNED:-0}"  # 1 = unassigned tickets count too
 ALLOW_BACKLOG="${LO_ALLOW_BACKLOG:-0}"        # 1 = fall to Backlog when Todo is empty
-# Which PRs are THIS loop's. Every linear-orchestrator writes the same bare 🌙
+# Which PRs are THIS loop's. Every watchloop writes the same bare 🌙
 # marker, so on a repo with two of them running the marker cannot tell them
 # apart: each reads the other's PRs as its own and reviews, re-drafts and
 # answers feedback on them. LO_OWNER puts a per-instance tag in the marker and
@@ -131,20 +131,20 @@ linear_ids() {
         | .id ] | sort | join(",")' 2>/dev/null
 }
 
-mkdir -p ~/.claude/linear-orchestrator
-STATE=~/.claude/linear-orchestrator/gate-state
+mkdir -p ~/.claude/watchloop
+STATE=~/.claude/watchloop/gate-state
 # The drafts fingerprint lives apart from the main hash on purpose. The main
 # hash covers the whole world, so anything at all moving it — an agent pushing
 # a commit on an unrelated branch, CI starting on somebody else's PR — makes
 # every open draft look new again. A draft is only work when something about
 # THAT draft moved.
-DSTATE=~/.claude/linear-orchestrator/gate-drafts-state
+DSTATE=~/.claude/watchloop/gate-drafts-state
 # Same reasoning for the de-gate list. REGATE normally clears itself: the model
 # acts, the PR goes back to draft, and it drops off. It only persists when the
 # model looks and deliberately declines — a conflict GitHub reports that does not
 # exist, a layer whose base is mid-repair — and nothing in the gate records that
 # decision, so an unconditional work=yes re-wakes on the entry forever.
-RSTATE=~/.claude/linear-orchestrator/gate-regate-state
+RSTATE=~/.claude/watchloop/gate-regate-state
 # Adopted PRs: PRs a person opened, not the loop, that the loop still looks
 # after. LO_ADOPT_AUTHORS lists the GitHub logins (comma separated, case
 # insensitive); LO_ADOPT_SINCE keeps it to PRs created after that instant, so
@@ -156,8 +156,8 @@ ADOPT_AUTHORS="${LO_ADOPT_AUTHORS:-}"
 ADOPT_SINCE="${LO_ADOPT_SINCE:-}"
 # The adopt fingerprint, kept apart for the same reason as DSTATE: an adopted PR
 # wakes the loop only when what it needs changed.
-ASTATE=~/.claude/linear-orchestrator/gate-adopt-state
-QUEUE=~/.claude/linear-orchestrator/${PREFIX}-queue.json
+ASTATE=~/.claude/watchloop/gate-adopt-state
+QUEUE=~/.claude/watchloop/${PREFIX}-queue.json
 AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.local/node/bin/agent-codemode")}"
 
 # --- Slack intake (off until LO_SLACK=1) ---
@@ -174,21 +174,21 @@ AC="${AGENT_CODEMODE:-$(command -v agent-codemode 2>/dev/null || echo "$HOME/.lo
 # group DM its Slack account is a member of. Invite the account to a channel to
 # have it watched; remove it to stop.
 SLACK_ON="${LO_SLACK:-0}"
-SLACK_CHANLIST=~/.claude/linear-orchestrator/gate-slack-channels   # membership, refreshed hourly
+SLACK_CHANLIST=~/.claude/watchloop/gate-slack-channels   # membership, refreshed hourly
 SLACK_SERVER="${LO_SLACK_SERVER:-slack}"      # MCP server name in Claude Code
 SLACK_INTERVAL="${LO_SLACK_INTERVAL:-300}"    # seconds between real reads; --wait probes every 60s
-SLACK_THREADS=~/.claude/linear-orchestrator/${PREFIX}-slack.json   # the tick's own record of threads
-SLACK_SEEN=~/.claude/linear-orchestrator/gate-slack-seen.json      # key -> fingerprint the tick acknowledged
-SLACK_NOW=~/.claude/linear-orchestrator/gate-slack-now.json        # the last read, with its time
+SLACK_THREADS=~/.claude/watchloop/${PREFIX}-slack.json   # the tick's own record of threads
+SLACK_SEEN=~/.claude/watchloop/gate-slack-seen.json      # key -> fingerprint the tick acknowledged
+SLACK_NOW=~/.claude/watchloop/gate-slack-now.json        # the last read, with its time
 # What the model was last shown, kept apart for the same reason as DSTATE: a
 # thread the tick failed to acknowledge wakes the loop once, not on every probe.
-SLSTATE=~/.claude/linear-orchestrator/gate-slack-state
+SLSTATE=~/.claude/watchloop/gate-slack-state
 # The keys of the last SLACK line the model was shown. An ack covers these keys
 # only: a channel that moved while the tick worked on another one was never
 # read, and acknowledging it would hide a person's message for good.
-SLACK_SHOWN=~/.claude/linear-orchestrator/gate-slack-shown.json
+SLACK_SHOWN=~/.claude/watchloop/gate-slack-shown.json
 # The same for the FEEDBACK line: what the model was last shown.
-FSTATE=~/.claude/linear-orchestrator/gate-feedback-state
+FSTATE=~/.claude/watchloop/gate-feedback-state
 SLACK_ERR=""
 SLACK_SIGS='{}'
 
@@ -262,10 +262,10 @@ INBOX_EMAIL="${LO_INBOX_EMAIL:-}"            # the mailbox to watch
 INBOX_USER_ID="${LO_INBOX_USER_ID:-}"        # that person's Hyre user id, for meetings and calls
 INBOX_SERVER="${LO_INBOX_SERVER:-hyre}"      # MCP server name in Claude Code
 INBOX_INTERVAL="${LO_INBOX_INTERVAL:-120}"   # seconds between real reads
-INBOX_SEEN=~/.claude/linear-orchestrator/gate-inbox-seen.json
-INBOX_NOW=~/.claude/linear-orchestrator/gate-inbox-now.json
-ISTATE=~/.claude/linear-orchestrator/gate-inbox-state
-INBOX_SHOWN=~/.claude/linear-orchestrator/gate-inbox-shown.json   # the kinds of the last INBOX line shown
+INBOX_SEEN=~/.claude/watchloop/gate-inbox-seen.json
+INBOX_NOW=~/.claude/watchloop/gate-inbox-now.json
+ISTATE=~/.claude/watchloop/gate-inbox-state
+INBOX_SHOWN=~/.claude/watchloop/gate-inbox-shown.json   # the kinds of the last INBOX line shown
 INBOX_ERR=""
 INBOX_SIGS='{}'
 
@@ -373,7 +373,7 @@ probe() {
   GATE_ERR=""
 
   # --- hourly base-branch refresh (refuses, never forces) ---
-  stamp=~/.claude/linear-orchestrator/last-fetch
+  stamp=~/.claude/watchloop/last-fetch
   notes=""
   if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(mtime "$stamp") )) -gt 3600 ]; then
     if [ -z "$(git -C $REPO status --porcelain --untracked-files=no)" ] \
@@ -432,7 +432,7 @@ probe() {
   # precisely as long as that slot's lock is alive. An agent that dies frees its
   # PR on the next probe; one that finishes frees it the moment its lock goes.
   # The 10-minute floor covers only the seconds between the spawn and the marker.
-  dispatch_dir="$HOME/.claude/linear-orchestrator/dispatched"
+  dispatch_dir="$HOME/.claude/watchloop/dispatched"
   mkdir -p "$dispatch_dir"
   now_s=$(date +%s)
   inhand=""

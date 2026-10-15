@@ -14,7 +14,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 [ -f "$here/.env" ] && set -a && . "$here/.env" && set +a
 [ -n "${LO_USAGE_WEEK_RESET:-}" ] && [ -n "${LO_WEEKLY_CHANNEL:-}" ] || exit 0
-dir="$HOME/.claude/linear-orchestrator"
+dir="$HOME/.claude/watchloop"
 mkdir -p "$dir"
 usage=$("$here/lo-usage.sh" --json)
 

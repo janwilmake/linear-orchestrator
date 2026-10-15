@@ -21,7 +21,7 @@
 #         read it off /usage), or the last 7 days when that is unset
 # Budgets: LO_BUDGET_5H (500), LO_BUDGET_DAY (1000), LO_BUDGET_WEEK (7000), USD.
 #
-# Ledger: ~/.claude/linear-orchestrator/usage/
+# Ledger: ~/.claude/watchloop/usage/
 #   tags.jsonl    one line per spawn, written by `tag`: session → ticket, kind, PR
 #   ledger.jsonl  one line per finished session (no message for LO_USAGE_IDLE_MIN,
 #                 default 30), written by every run. A session that was resumed
@@ -31,16 +31,16 @@
 # A session without a tag is matched to a ticket by its git branch or first
 # prompt (LO_PREFIX-123). Spend is grouped by the ticket's Linear project, or
 # "(no project)". Spend with no ticket is the loop's own cost when it is the
-# session that runs /linear-orchestrator ("linear-orchestrator (loop)"), a
-# Slack research agent ("linear-orchestrator (slack research)": tagged --kind 2s
+# session that runs /watchloop ("watchloop (loop)"), a
+# Slack research agent ("watchloop (slack research)": tagged --kind 2s
 # or 2i, or a prompt that reads a Slack thread) or another agent the loop
-# started ("linear-orchestrator (agents)"); else "(no ticket)".
+# started ("watchloop (agents)"); else "(no ticket)".
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 [ -f "$here/.env" ] && set -a && . "$here/.env" && set +a
-dir="$HOME/.claude/linear-orchestrator/usage"
+dir="$HOME/.claude/watchloop/usage"
 mkdir -p "$dir"
 
 if [ "${1:-}" = tag ]; then
@@ -131,7 +131,7 @@ for sid, f, sub in files:
                               "cost_state": None})
     seen = set()
     for line in open(f, "rb"):
-        if not sub and b"<command-name>/linear-orchestrator" in line:
+        if not sub and (b"<command-name>/watchloop" in line or b"<command-name>/linear-orchestrator" in line):
             s["loop"] = True
         if b'"usage"' not in line and b'"cost-state"' not in line and (s["cwd"] and s["prompt"]):
             continue
@@ -220,11 +220,11 @@ def attribute(sid, s):
     agent = (s["cwd"] or "").startswith(agents_dir)
     research = tag.get("kind") in ("2s", "2i") or "slack_read_thread" in (s["prompt"] or "")
     if not ticket and s.get("loop"):
-        project = "linear-orchestrator (loop)"
+        project = "watchloop (loop)"
     elif not ticket and agent and research:
-        project = "linear-orchestrator (slack research)"
+        project = "watchloop (slack research)"
     elif not ticket and agent:
-        project = "linear-orchestrator (agents)"
+        project = "watchloop (agents)"
     elif not ticket:
         project = "(no ticket)"
     elif ticket not in tcache:

@@ -69,7 +69,7 @@ if kind == "adopt-review":
 marker += " -->"
 line = f"<b>{local} - 🧍 Request (Human Input) - {summary}</b>" if kind == "human" else f"{local} · {summary}"
 entry = f"{marker}\n<details>\n\n<summary>{line}</summary>\n\n{detail}\n\n</details>\n"
-head = f"<!-- {tag} log -->\n**linear-orchestrator log** — newest at the bottom. Expand a line for the details.\n\n"
+head = f"<!-- {tag} log -->\n**watchloop log** — newest at the bottom. Expand a line for the details.\n\n"
 body = (old["body"].rstrip() + "\n\n" + entry) if old else head + entry
 # GitHub caps a comment at 65,536 characters. Shrink the oldest entries to
 # their summary line until the body fits.

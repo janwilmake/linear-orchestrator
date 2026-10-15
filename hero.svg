@@ -2,7 +2,7 @@
   <rect width="1280" height="700" fill="#0d1117"/>
   <rect x="0" y="0" width="1280" height="4" fill="#7c8cff"/>
 
-  <text x="64" y="96" fill="#e6edf3" font-size="46" font-weight="700">linear-orchestrator</text>
+  <text x="64" y="96" fill="#e6edf3" font-size="46" font-weight="700">watchloop</text>
   <text x="64" y="140" fill="#8b949e" font-size="23">Tickets in. Reviewed pull requests out. Nobody watching.</text>
   <text x="64" y="176" fill="#6e7681" font-size="17">A Claude Code skill that runs your board overnight — and hands the morning back to you.</text>
 

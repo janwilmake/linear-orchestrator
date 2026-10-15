@@ -6,7 +6,7 @@ it — read this when a run looks wrong, or when you want to change it.
 ## The gate — one `bash` call, no model
 
 ```
-$ /linear-orchestrator
+$ /watchloop
 waiting for work - probe every 60s, give up after 40m
 17:22Z NO - slots=1, nothing to take; no drafts; linear ready column empty
 17:41Z NO - no slot: ram 2.2gb free, 2.5gb per agent, busy=1; 1 draft(s) waiting

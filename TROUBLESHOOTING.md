@@ -1,4 +1,4 @@
-# linear-orchestrator — what goes wrong
+# watchloop — what goes wrong
 
 Operational failure modes seen on real runs — the morning-debugging companion
 to `SKILL.md`. The tick itself does not read this.

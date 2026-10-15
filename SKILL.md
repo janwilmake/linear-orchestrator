@@ -1,9 +1,9 @@
 ---
-name: linear-orchestrator
+name: watchloop
 description: Nightly orchestrator that turns tracker tickets into reviewed PRs unattended. Runs on a 5-minute loop, spawns one agent per 2.5 GB of free RAM every tick (uncapped by default, so it reaches full capacity immediately), picks Todo tickets from Linear assigned to a preferred or fallback assignee — unassigned tickets and the Backlog column are opt-in, not the default, and spawns `cca` agents on Opus — one to write the code and open a draft PR, a second in a fresh context to review that diff and fix what the review found. Point it at your own repo in the Project settings table. Use when the user says "start the orchestrator", "run the nightly loop", "orchestrate linear", or asks for tickets to be worked through unattended overnight.
 ---
 
-# linear-orchestrator — unattended nightly ticket runner
+# watchloop — unattended nightly ticket runner
 
 One agent writes the code and stops. A second agent, in a fresh context,
 reviews that diff and fixes what the review found. Every PR opens as a draft and
@@ -49,7 +49,7 @@ Fixed: `TRACKER` Linear MCP · `FORGE` GitHub (`gh`) · `AGENT_GUIDE` your repo'
 `CLAIMED_STATUS` `In Progress` · `INVALID_LABEL` `invalid` · `REVIEW_COMMAND`
 `/review <PR#>` · `DEV_SERVER` Vite on a free port 5200–5299 · `PROD_SURFACES`
 never write · `QUEUE_CACHE` / `WORK_CACHE`
-`~/.claude/linear-orchestrator/<PREFIX>-{queue,work}.json` · `MAX_AGENTS` =
+`~/.claude/watchloop/<PREFIX>-{queue,work}.json` · `MAX_AGENTS` =
 `floor(ram / RAM_PER_AGENT_GB)`, or `min(MAX_AGENTS_CAP, that)` when the cap > 0.
 
 - **Every tick spawns every free slot, not one.** `slots` is
@@ -86,7 +86,7 @@ never write · `QUEUE_CACHE` / `WORK_CACHE`
 
    Its exit is the next tick. Then add the safety net, because a dead waiter
    takes the loop with it: invoke the `loop` skill with
-   `/loop 1h /linear-orchestrator tick`. Do not detach either with `nohup`, and
+   `/loop 1h /watchloop tick`. Do not detach either with `nohup`, and
    do not write ticks to a log file.
 5. Tell the user the loop is live, what the first agents took, and how to stop it.
 
@@ -175,7 +175,7 @@ summary lines and opens only what they need.
 **`lo-log.sh` beside this skill is the only writer**:
 
 ```bash
-~/.claude/skills/linear-orchestrator/lo-log.sh <PR#> <kind> "<one-line summary>" <detail-file|-> [--ack <comment-id>]
+~/.claude/skills/watchloop/lo-log.sh <PR#> <kind> "<one-line summary>" <detail-file|-> [--ack <comment-id>]
 ```
 
 It creates the comment on first use, appends the entry, writes a hidden
@@ -274,7 +274,7 @@ read the messages; the tick does.
 loop's own account. A `claude.ai Slack` connector, when the session has one,
 belongs to a person. Never read or post through it.
 
-`SLACK_CACHE` is `~/.claude/linear-orchestrator/<PREFIX>-slack.json`:
+`SLACK_CACHE` is `~/.claude/watchloop/<PREFIX>-slack.json`:
 
 ```json
 { "since": "1791728209.000000",
@@ -599,7 +599,7 @@ new emails, meetings and calls in Hyre, and sends that person a Slack DM about
 each one that matters. `gate.sh` fingerprints the newest rows through the MCP
 server named `hyre` and prints the kinds that moved on the `INBOX` line.
 
-`INBOX_CACHE` is `~/.claude/linear-orchestrator/<PREFIX>-inbox.json`:
+`INBOX_CACHE` is `~/.claude/watchloop/<PREFIX>-inbox.json`:
 
 ```json
 { "since": "2026-10-13T08:00:00Z",
@@ -852,7 +852,7 @@ invocation:
 
 ```bash
 sid=$(uuidgen | tr A-Z a-z)
-~/.claude/skills/linear-orchestrator/lo-usage.sh tag "$sid" <TICKET> --kind <new|2a|2b|2c|2e> [--pr <PR#>]
+~/.claude/skills/watchloop/lo-usage.sh tag "$sid" <TICKET> --kind <new|2a|2b|2c|2e> [--pr <PR#>]
 cca "<the full prompt>" --dangerously-skip-permissions --non-interactive --model opus --session-id "$sid"
 ```
 
@@ -862,14 +862,14 @@ All three flags are load-bearing: nobody is awake to answer a prompt;
 usage ledger; `lo-usage.sh` looks up the ticket's Linear project itself. Work on
 an existing PR passes the ticket from its branch. Work with no ticket, a Slack
 research agent above all, passes `-` as the ticket and `--kind 2s` (or `2i` for
-an inbox item), so its cost shows as "linear-orchestrator (slack research)". A
+an inbox item), so its cost shows as "watchloop (slack research)". A
 failed tag never blocks the spawn.
 
 **Work aimed at an existing PR needs a dispatch marker, written in the same Bash
 call** (2a, 2b, 2c — a fresh ticket has no PR yet):
 
 ```bash
-echo "<slot>" > ~/.claude/linear-orchestrator/dispatched/<PR#>
+echo "<slot>" > ~/.claude/watchloop/dispatched/<PR#>
 ```
 
 `cca` prints the slot it took (`agent-1 -> …`). The gate holds the PR while that
@@ -883,12 +883,12 @@ symlink into the user's checkout, so **no agent may run `npm install`**. See
 
 One or two lines: the resource numbers, what was taken and of which kind, the
 slots, any PR promoted, what is left in each cache, and the three usage
-percentages from `~/.claude/skills/linear-orchestrator/lo-usage.sh` (run it every
+percentages from `~/.claude/skills/watchloop/lo-usage.sh` (run it every
 tick: it is also what settles finished agents into the ledger). The percentages
 are reported, not acted on, yet.
 
 **The weekly report.** Every tick with `LO_SLACK=1` also runs
-`~/.claude/skills/linear-orchestrator/lo-weekly.sh`. It prints nothing until a
+`~/.claude/skills/watchloop/lo-weekly.sh`. It prints nothing until a
 report is due: once per week, from each `LO_USAGE_WEEK_RESET` on. Then it prints
 the report for the week that just ended: the plan usage per project, the PRs
 merged into `BASE_BRANCH` and how many the loop opened, and the lines added,
@@ -1003,7 +1003,7 @@ it already has overrides what it correctly knew.
 >
 > **The body ends with the loop's own footer, not the harness's.** Replace the
 > `🤖 Generated with [Claude Code](…)` line the harness asks for with:
-> `🎼 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](<session URL>)`
+> `🎼 Generated with [watchloop](https://github.com/janwilmake/watchloop) · [Claude Session](<session URL>)`
 > — the session URL is the `https://claude.ai/code/session_…` link the harness
 > hands your session; when it gave you none, drop the second half. Keep the
 > `Claude-Session:` git trailer as it is.
@@ -1011,7 +1011,7 @@ it already has overrides what it correctly knew.
 >
 > **Never post a PR comment of your own.** Anything you have to say on the PR
 > is one entry in the loop's log comment, written with
-> `~/.claude/skills/linear-orchestrator/lo-log.sh <PR#> note "<one line>" <file>`.
+> `~/.claude/skills/watchloop/lo-log.sh <PR#> note "<one line>" <file>`.
 > The orchestrator answers an unmarked comment as if a person wrote it.
 >
 > **Every section of the body is collapsed**, `## Decisions` included: a
@@ -1021,7 +1021,7 @@ it already has overrides what it correctly knew.
 > **Screenshots are not a section of their own** — the before shot goes in
 > **Problem**, the after shot in **Solution**, each beside the sentence it proves.
 > Drive the real screen in the browser. **Upload with
-> `~/.claude/skills/linear-orchestrator/gh-attach <owner/repo> <PR#> <file>...`**:
+> `~/.claude/skills/watchloop/gh-attach <owner/repo> <PR#> <file>...`**:
 > it prints one `user-attachments` link per file and posts nothing; put the
 > links in the body. It reuses the GitHub login of the desktop Chrome on the
 > machine, so that Chrome must be signed in once. Without `gh-attach`, upload
@@ -1033,7 +1033,7 @@ it already has overrides what it correctly knew.
 > **Look at every image, video and voice recording** that the ticket, the PR or
 > the thread carries; never answer around one. Read an image directly. For a
 > video, a voice note or a Loom link, run
-> `~/.claude/skills/linear-orchestrator/media-digest <file | url | slack:FILEID>`:
+> `~/.claude/skills/watchloop/media-digest <file | url | slack:FILEID>`:
 > it writes one sheet of up to 20 frames with their times, the same frames at
 > full size, and a transcript with timestamps in the language that is spoken.
 > Read the sheet and the transcript together, and open a single frame when the
@@ -1157,7 +1157,7 @@ else: no features, no bug fixes.
   after your fix pass, and re-grade **Risk / rollback**'s word if the review
   found a blocker. Keep every title summary within its word budget.
   The body's last line is the loop footer —
-  `🎼 Generated with [linear-orchestrator](https://github.com/janwilmake/linear-orchestrator) · [Claude Session](…)`
+  `🎼 Generated with [watchloop](https://github.com/janwilmake/watchloop) · [Claude Session](…)`
   — so replace a bare `Generated with Claude Code` line with it, keeping the
   author's session link.
 
@@ -1205,7 +1205,7 @@ channel id and the thread `ts`.
 * **Look at every image, video and voice recording** that the ticket, the PR or
   the thread carries; never answer around one. Read an image directly. For a
   video, a voice note or a Loom link, run
-  `~/.claude/skills/linear-orchestrator/media-digest <file | url | slack:FILEID>`:
+  `~/.claude/skills/watchloop/media-digest <file | url | slack:FILEID>`:
   it writes one sheet of up to 20 frames with their times, the same frames at
   full size, and a transcript with timestamps in the language that is spoken.
   Read the sheet and the transcript together, and open a single frame when the
